@@ -18,6 +18,12 @@ public sealed class NotesController(NotesDbContext dbContext) : ControllerBase
         CreateNoteRequest request,
         CancellationToken cancellationToken)
     {
+        if (string.IsNullOrWhiteSpace(request.Title))
+        {
+            ModelState.AddModelError(nameof(request.Title), "Title must contain non-whitespace characters.");
+            return ValidationProblem(ModelState);
+        }
+
         var accessResult = await CheckTeamAccess(teamId, cancellationToken);
         if (accessResult is not null)
         {
@@ -115,6 +121,12 @@ public sealed class NotesController(NotesDbContext dbContext) : ControllerBase
         UpdateNoteRequest request,
         CancellationToken cancellationToken)
     {
+        if (string.IsNullOrWhiteSpace(request.Title))
+        {
+            ModelState.AddModelError(nameof(request.Title), "Title must contain non-whitespace characters.");
+            return ValidationProblem(ModelState);
+        }
+
         var note = await dbContext.Notes.SingleOrDefaultAsync(note => note.Id == noteId, cancellationToken);
         if (note is null)
         {

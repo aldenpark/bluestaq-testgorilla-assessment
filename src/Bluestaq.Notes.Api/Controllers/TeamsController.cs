@@ -17,6 +17,12 @@ public sealed class TeamsController(NotesDbContext dbContext) : ControllerBase
         CreateTeamRequest request,
         CancellationToken cancellationToken)
     {
+        if (string.IsNullOrWhiteSpace(request.Name))
+        {
+            ModelState.AddModelError(nameof(request.Name), "Name must contain non-whitespace characters.");
+            return ValidationProblem(ModelState);
+        }
+
         var userId = User.GetUserId();
         var now = DateTime.UtcNow;
         var team = new Team
