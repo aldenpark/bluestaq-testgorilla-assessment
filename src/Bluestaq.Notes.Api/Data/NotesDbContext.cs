@@ -12,6 +12,7 @@ public sealed class NotesDbContext(DbContextOptions<NotesDbContext> options) : D
     public DbSet<Note> Notes => Set<Note>();
     public DbSet<NotePermission> NotePermissions => Set<NotePermission>();
     public DbSet<SecurityAuditEvent> SecurityAuditEvents => Set<SecurityAuditEvent>();
+    public DbSet<ReadinessProbe> ReadinessProbes => Set<ReadinessProbe>();
 
     /// <summary>Saves tracked changes after rejecting any audit-event updates or deletions.</summary>
     public override int SaveChanges(bool acceptAllChangesOnSuccess)
@@ -59,6 +60,7 @@ public sealed class NotesDbContext(DbContextOptions<NotesDbContext> options) : D
             entity.Property(team => team.Name).HasMaxLength(100);
             entity.Property(team => team.CreatedAt)
                 .HasConversion(value => value, value => DateTime.SpecifyKind(value, DateTimeKind.Utc));
+            entity.Property(team => team.Version).IsConcurrencyToken();
             entity.HasOne(team => team.Owner)
                 .WithMany()
                 .HasForeignKey(team => team.OwnerId)
@@ -128,10 +130,22 @@ public sealed class NotesDbContext(DbContextOptions<NotesDbContext> options) : D
             entity.Property(auditEvent => auditEvent.TargetType).HasMaxLength(50);
             entity.Property(auditEvent => auditEvent.TraceId).HasMaxLength(100);
             entity.Property(auditEvent => auditEvent.Details).HasMaxLength(4_000);
+            entity.Property(auditEvent => auditEvent.IntegrityHash).HasMaxLength(64).IsFixedLength();
             entity.HasIndex(auditEvent => new { auditEvent.OccurredAt, auditEvent.Id });
             entity.HasIndex(auditEvent => new { auditEvent.ActorUserId, auditEvent.OccurredAt });
             entity.HasIndex(auditEvent => new { auditEvent.TeamId, auditEvent.OccurredAt });
             entity.HasIndex(auditEvent => auditEvent.TargetId);
+        });
+
+        modelBuilder.Entity<ReadinessProbe>(entity =>
+        {
+            entity.HasKey(probe => probe.Id);
+            ConfigureUtc(entity.Property(probe => probe.CheckedAt));
+            entity.HasData(new ReadinessProbe
+            {
+                Id = 1,
+                CheckedAt = new DateTime(2000, 1, 1, 0, 0, 0, DateTimeKind.Utc),
+            });
         });
     }
 

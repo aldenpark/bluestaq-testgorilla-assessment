@@ -21,8 +21,9 @@ public sealed class ManagedCollaborationTests(NotesApiFactory factory) : IClassF
         using var alice = CreateClient("dev-alice-api-key");
         var team = await CreateTeam(alice);
 
-        var inviteResponse = await alice.PostAsJsonAsync(
-            $"/api/teams/{team.Id}/invitations",
+        var inviteResponse = await alice.PostTeamAsync(
+            team.Id,
+            "/invitations",
             new InviteTeamMemberRequest { DisplayName = "Invited user", KeyName = "Initial" });
         Assert.Equal(HttpStatusCode.Created, inviteResponse.StatusCode);
         var invitation = await inviteResponse.Content.ReadFromJsonAsync<InvitationResponse>();
@@ -97,7 +98,7 @@ public sealed class ManagedCollaborationTests(NotesApiFactory factory) : IClassF
         Assert.Equal(HttpStatusCode.Created, (await AddBob(alice, team.Id)).StatusCode);
         var bobNote = await CreateNote(bob, team.Id, "Member note", "Owner can administer");
         Assert.Equal(HttpStatusCode.OK, (await UpdateNote(alice, bobNote.Id)).StatusCode);
-        Assert.Equal(HttpStatusCode.NoContent, (await alice.DeleteAsync($"/api/notes/{bobNote.Id}")).StatusCode);
+        Assert.Equal(HttpStatusCode.NoContent, (await alice.DeleteNoteAsync(bobNote.Id)).StatusCode);
         var note = await CreateNote(alice, team.Id, "Permission test", "Owner content");
 
         Assert.Equal(HttpStatusCode.OK, (await bob.GetAsync($"/api/notes/{note.Id}")).StatusCode);
@@ -107,22 +108,24 @@ public sealed class ManagedCollaborationTests(NotesApiFactory factory) : IClassF
             HttpStatusCode.Forbidden,
             (await bob.GetAsync($"/api/notes/{note.Id}/permissions")).StatusCode);
 
-        var grant = await alice.PutAsJsonAsync(
-            $"/api/notes/{note.Id}/permissions/{BobId}",
+        var grant = await alice.PutNoteAsync(
+            note.Id,
+            $"/permissions/{BobId}",
             new SetNotePermissionRequest { Role = NotePermissionRole.Editor });
         Assert.Equal(HttpStatusCode.OK, grant.StatusCode);
         Assert.Equal(HttpStatusCode.OK, (await UpdateNote(bob, note.Id)).StatusCode);
         Assert.Equal(HttpStatusCode.Forbidden, (await bob.DeleteAsync($"/api/notes/{note.Id}")).StatusCode);
 
-        var downgrade = await alice.PutAsJsonAsync(
-            $"/api/notes/{note.Id}/permissions/{BobId}",
+        var downgrade = await alice.PutNoteAsync(
+            note.Id,
+            $"/permissions/{BobId}",
             new SetNotePermissionRequest { Role = NotePermissionRole.Reader });
         Assert.Equal(HttpStatusCode.OK, downgrade.StatusCode);
         Assert.Equal(HttpStatusCode.Forbidden, (await UpdateNote(bob, note.Id)).StatusCode);
 
         Assert.Equal(
             HttpStatusCode.NoContent,
-            (await alice.DeleteAsync($"/api/teams/{team.Id}/members/{BobId}")).StatusCode);
+            (await alice.DeleteTeamAsync(team.Id, $"/members/{BobId}")).StatusCode);
         await using var db = factory.CreateDbContext();
         Assert.False(await db.NotePermissions.AnyAsync(
             permission => permission.NoteId == note.Id && permission.UserId == BobId));
@@ -147,11 +150,11 @@ public sealed class ManagedCollaborationTests(NotesApiFactory factory) : IClassF
                 $"/api/teams/{team.Id}/invitations",
                 new InviteTeamMemberRequest { DisplayName = "Denied", KeyName = "Denied" })).StatusCode);
 
-        var rename = await alice.PatchAsJsonAsync(
-            $"/api/teams/{team.Id}",
+        var rename = await alice.PatchTeamAsync(
+            team.Id,
             new UpdateTeamRequest { Name = "Renamed" });
         Assert.Equal("Renamed", (await rename.Content.ReadFromJsonAsync<TeamResponse>())?.Name);
-        Assert.Equal(HttpStatusCode.NoContent, (await alice.DeleteAsync($"/api/teams/{team.Id}")).StatusCode);
+        Assert.Equal(HttpStatusCode.NoContent, (await alice.DeleteTeamAsync(team.Id)).StatusCode);
         Assert.Equal(HttpStatusCode.NotFound, (await alice.GetAsync($"/api/teams/{team.Id}")).StatusCode);
 
         await using var db = factory.CreateDbContext();
@@ -281,9 +284,7 @@ public sealed class ManagedCollaborationTests(NotesApiFactory factory) : IClassF
     }
 
     private static Task<HttpResponseMessage> AddBob(HttpClient client, Guid teamId) =>
-        client.PostAsJsonAsync(
-            $"/api/teams/{teamId}/members",
-            new AddTeamMemberRequest { UserId = BobId });
+        client.PostTeamAsync(teamId, "/members", new AddTeamMemberRequest { UserId = BobId });
 
     private static async Task<NoteResponse> CreateNote(
         HttpClient client,

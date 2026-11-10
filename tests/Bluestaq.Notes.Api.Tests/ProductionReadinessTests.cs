@@ -20,8 +20,9 @@ public sealed class ProductionReadinessTests(NotesApiFactory factory) : IClassFi
         var team = await CreateTeam(alice);
         Assert.Equal(
             HttpStatusCode.Created,
-            (await alice.PostAsJsonAsync(
-                $"/api/teams/{team.Id}/members",
+            (await alice.PostTeamAsync(
+                team.Id,
+                "/members",
                 new AddTeamMemberRequest { UserId = BobId })).StatusCode);
 
         var create = await alice.PostAsJsonAsync(
@@ -38,16 +39,23 @@ public sealed class ProductionReadinessTests(NotesApiFactory factory) : IClassFi
         Assert.Equal(HttpStatusCode.NotFound, (await bob.GetAsync($"/api/notes/{note.Id}")).StatusCode);
         Assert.Empty((await bob.GetFromJsonAsync<PagedNotesResponse>($"/api/teams/{team.Id}/notes"))!.Items);
 
-        await alice.PutAsJsonAsync(
-            $"/api/notes/{note.Id}/permissions/{BobId}",
+        await alice.PutNoteAsync(
+            note.Id,
+            $"/permissions/{BobId}",
             new SetNotePermissionRequest { Role = NotePermissionRole.Reader });
         Assert.Equal(HttpStatusCode.OK, (await bob.GetAsync($"/api/notes/{note.Id}")).StatusCode);
         Assert.Equal(HttpStatusCode.Forbidden, (await UpdateNote(bob, note.Id, "\"1\"")).StatusCode);
 
-        await alice.PutAsJsonAsync(
-            $"/api/notes/{note.Id}/permissions/{BobId}",
+        await alice.PutNoteAsync(
+            note.Id,
+            $"/permissions/{BobId}",
             new SetNotePermissionRequest { Role = NotePermissionRole.Editor });
-        Assert.Equal(HttpStatusCode.OK, (await UpdateNote(bob, note.Id, "\"1\"")).StatusCode);
+        Assert.Equal(
+            HttpStatusCode.OK,
+            (await bob.PutNoteAsync(
+                note.Id,
+                "",
+                new UpdateNoteRequest { Title = "Updated", Content = "v2" })).StatusCode);
     }
 
     [Fact]
@@ -96,8 +104,9 @@ public sealed class ProductionReadinessTests(NotesApiFactory factory) : IClassFi
     {
         using var alice = CreateClient("dev-alice-api-key");
         var team = await CreateTeam(alice);
-        var inviteResponse = await alice.PostAsJsonAsync(
-            $"/api/teams/{team.Id}/invitations",
+        var inviteResponse = await alice.PostTeamAsync(
+            team.Id,
+            "/invitations",
             new InviteTeamMemberRequest { DisplayName = "Concurrent user", KeyName = "First" });
         var invitation = await inviteResponse.Content.ReadFromJsonAsync<InvitationResponse>();
         Assert.NotNull(invitation);

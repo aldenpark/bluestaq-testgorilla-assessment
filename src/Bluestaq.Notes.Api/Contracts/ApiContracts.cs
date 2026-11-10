@@ -17,6 +17,12 @@ public sealed class AddTeamMemberRequest
     public Guid UserId { get; init; }
 }
 
+/// <summary>Identifies the current team member who will become the new owner.</summary>
+public sealed class TransferTeamOwnershipRequest
+{
+    public Guid UserId { get; init; }
+}
+
 /// <summary>Contains the values that may be changed on a team.</summary>
 public sealed class UpdateTeamRequest
 {
@@ -49,6 +55,7 @@ public sealed record TeamResponse(
     string Name,
     Guid OwnerId,
     DateTime CreatedAt,
+    int Version,
     IReadOnlyCollection<TeamMemberResponse> Members);
 
 /// <summary>Represents one user's membership in a team.</summary>
@@ -63,6 +70,7 @@ public sealed class CreateNoteRequest
     [Required, StringLength(10_000)]
     public required string Content { get; init; }
 
+    [EnumDataType(typeof(NoteVisibility))]
     public NoteVisibility Visibility { get; init; } = NoteVisibility.Team;
 }
 
@@ -123,7 +131,7 @@ public sealed record ApiKeyCreatedResponse(
 /// <summary>Contains the role to grant a team member on a note.</summary>
 public sealed class SetNotePermissionRequest
 {
-    [Required]
+    [Required, EnumDataType(typeof(NotePermissionRole))]
     public NotePermissionRole? Role { get; init; }
 }
 
@@ -141,6 +149,7 @@ public sealed record SecurityAuditEventResponse(
     string TargetType,
     Guid TargetId,
     string TraceId,
+    string IntegrityHash,
     JsonElement Details);
 
 /// <summary>Contains one page of security audit events and an optional cursor for the next page.</summary>

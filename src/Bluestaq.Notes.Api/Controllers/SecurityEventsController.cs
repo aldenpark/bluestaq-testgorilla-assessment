@@ -15,6 +15,7 @@ namespace Bluestaq.Notes.Api.Controllers;
 [Authorize]
 [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status401Unauthorized)]
 [Route("api")]
+[Route("api/v1")]
 public sealed class SecurityEventsController(NotesDbContext dbContext) : ControllerBase
 {
     /// <summary>Lists security events performed by or directly affecting the authenticated user.</summary>
@@ -114,6 +115,7 @@ public sealed class SecurityEventsController(NotesDbContext dbContext) : Control
             auditEvent.TargetType,
             auditEvent.TargetId,
             auditEvent.TraceId,
+            auditEvent.IntegrityHash,
             ParseDetails(auditEvent.Details));
 
     /// <summary>Parses stored JSON details into a response-safe detached JSON value.</summary>

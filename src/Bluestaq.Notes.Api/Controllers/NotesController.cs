@@ -15,6 +15,7 @@ namespace Bluestaq.Notes.Api.Controllers;
 [Authorize]
 [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status401Unauthorized)]
 [Route("api")]
+[Route("api/v1")]
 public sealed class NotesController(
     NotesDbContext dbContext,
     SecurityAudit securityAudit,
@@ -187,18 +188,6 @@ public sealed class NotesController(
             return ValidationProblem(ModelState);
         }
 
-        if (!Request.Headers.TryGetValue("If-Match", out var ifMatch))
-        {
-            return Problem(
-                "If-Match is required for note updates.",
-                statusCode: StatusCodes.Status428PreconditionRequired);
-        }
-
-        if (!TryParseEtag(ifMatch.ToString(), out var expectedVersion))
-        {
-            return Problem("If-Match must contain a quoted note version.", statusCode: StatusCodes.Status400BadRequest);
-        }
-
         var note = await dbContext.Notes.SingleOrDefaultAsync(note => note.Id == noteId, cancellationToken);
         if (note is null)
         {
@@ -212,9 +201,10 @@ public sealed class NotesController(
         }
 
 
-        if (note.Version != expectedVersion)
+        var versionResult = CheckVersion(note.Version, "note update");
+        if (versionResult is not null)
         {
-            return Problem("The note changed after it was read.", statusCode: StatusCodes.Status412PreconditionFailed);
+            return versionResult;
         }
 
         note.Title = request.Title.Trim();
@@ -250,8 +240,22 @@ public sealed class NotesController(
             return Forbid();
         }
 
+        var versionResult = CheckVersion(note.Version, "note deletion");
+        if (versionResult is not null)
+        {
+            return versionResult;
+        }
+
         dbContext.Notes.Remove(note);
-        await dbContext.SaveChangesAsync(cancellationToken);
+        try
+        {
+            await dbContext.SaveChangesAsync(cancellationToken);
+        }
+        catch (DbUpdateConcurrencyException)
+        {
+            return Problem("The note changed after it was read.", statusCode: StatusCodes.Status412PreconditionFailed);
+        }
+
         return NoContent();
     }
 
@@ -261,7 +265,7 @@ public sealed class NotesController(
         Guid noteId,
         CancellationToken cancellationToken)
     {
-        var note = await dbContext.Notes.AsNoTracking().SingleOrDefaultAsync(
+        var note = await dbContext.Notes.SingleOrDefaultAsync(
             candidate => candidate.Id == noteId,
             cancellationToken);
         if (note is null)
@@ -300,7 +304,7 @@ public sealed class NotesController(
             return ValidationProblem(ModelState);
         }
 
-        var note = await dbContext.Notes.AsNoTracking().SingleOrDefaultAsync(
+        var note = await dbContext.Notes.SingleOrDefaultAsync(
             candidate => candidate.Id == noteId,
             cancellationToken);
         if (note is null)
@@ -311,6 +315,12 @@ public sealed class NotesController(
         if (!await CanAdminister(note, User.GetUserId(), cancellationToken))
         {
             return Forbid();
+        }
+
+        var versionResult = CheckVersion(note.Version, "permission update");
+        if (versionResult is not null)
+        {
+            return versionResult;
         }
 
         var member = await dbContext.TeamMemberships
@@ -345,7 +355,19 @@ public sealed class NotesController(
                 PreviousRole = previousRole,
                 Role = permission.Role.ToString().ToLowerInvariant(),
             });
-        await dbContext.SaveChangesAsync(cancellationToken);
+        note.Version++;
+        note.UpdatedById = User.GetUserId();
+        note.UpdatedAt = timeProvider.GetUtcNow().UtcDateTime;
+        try
+        {
+            await dbContext.SaveChangesAsync(cancellationToken);
+        }
+        catch (DbUpdateConcurrencyException)
+        {
+            return Problem("The note changed after it was read.", statusCode: StatusCodes.Status412PreconditionFailed);
+        }
+
+        SetEtag(note.Version);
         return Ok(new NotePermissionResponse(member.UserId, member.DisplayName, permission.Role));
     }
 
@@ -356,7 +378,7 @@ public sealed class NotesController(
         Guid userId,
         CancellationToken cancellationToken)
     {
-        var note = await dbContext.Notes.AsNoTracking().SingleOrDefaultAsync(
+        var note = await dbContext.Notes.SingleOrDefaultAsync(
             candidate => candidate.Id == noteId,
             cancellationToken);
         if (note is null)
@@ -369,6 +391,12 @@ public sealed class NotesController(
             return Forbid();
         }
 
+        var versionResult = CheckVersion(note.Version, "permission deletion");
+        if (versionResult is not null)
+        {
+            return versionResult;
+        }
+
         var permission = await dbContext.NotePermissions.FindAsync([noteId, userId], cancellationToken);
         if (permission is not null)
         {
@@ -379,7 +407,19 @@ public sealed class NotesController(
                 userId,
                 note.TeamId,
                 new { NoteId = note.Id, Role = permission.Role.ToString().ToLowerInvariant() });
-            await dbContext.SaveChangesAsync(cancellationToken);
+            note.Version++;
+            note.UpdatedById = User.GetUserId();
+            note.UpdatedAt = timeProvider.GetUtcNow().UtcDateTime;
+            try
+            {
+                await dbContext.SaveChangesAsync(cancellationToken);
+            }
+            catch (DbUpdateConcurrencyException)
+            {
+                return Problem("The note changed after it was read.", statusCode: StatusCodes.Status412PreconditionFailed);
+            }
+
+            SetEtag(note.Version);
         }
 
         return NoContent();
@@ -492,17 +532,26 @@ public sealed class NotesController(
             note.UpdatedAt);
 
     /// <summary>Writes a strong entity tag containing the current note version.</summary>
-    private void SetEtag(int version) => Response.Headers.ETag = $"\"{version}\"";
+    private void SetEtag(int version) => Response.Headers.ETag = EntityTagPolicy.Format(version);
 
-    /// <summary>Parses the strong entity tag accepted by note replacement requests.</summary>
-    private static bool TryParseEtag(string value, out int version)
+    /// <summary>Requires a matching strong entity tag before a note mutation.</summary>
+    private ActionResult? CheckVersion(int currentVersion, string operation)
     {
-        version = 0;
-        return value.Length >= 3
-            && value[0] == '"'
-            && value[^1] == '"'
-            && int.TryParse(value[1..^1], out version)
-            && version > 0;
+        if (!Request.Headers.TryGetValue("If-Match", out var ifMatch))
+        {
+            return Problem(
+                $"If-Match is required for {operation}.",
+                statusCode: StatusCodes.Status428PreconditionRequired);
+        }
+
+        if (!EntityTagPolicy.TryParse(ifMatch.ToString(), out var expectedVersion))
+        {
+            return Problem("If-Match must contain a quoted resource version.", statusCode: StatusCodes.Status400BadRequest);
+        }
+
+        return currentVersion == expectedVersion
+            ? null
+            : Problem("The note changed after it was read.", statusCode: StatusCodes.Status412PreconditionFailed);
     }
 
     /// <summary>Captures the timestamp and identifier used for stable note pagination.</summary>

@@ -14,6 +14,7 @@ namespace Bluestaq.Notes.Api.Controllers;
 [Authorize]
 [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status401Unauthorized)]
 [Route("api/teams")]
+[Route("api/v1/teams")]
 public sealed class TeamsController(
     NotesDbContext dbContext,
     SecurityAudit securityAudit,
@@ -56,6 +57,7 @@ public sealed class TeamsController(
             new { team.Name });
         await dbContext.SaveChangesAsync(cancellationToken);
 
+        SetEtag(team.Version);
         return CreatedAtAction(nameof(Get), new { teamId = team.Id }, await BuildResponse(team.Id, cancellationToken));
     }
 
@@ -89,7 +91,9 @@ public sealed class TeamsController(
             return accessResult;
         }
 
-        return Ok(await BuildResponse(teamId, cancellationToken));
+        var response = await BuildResponse(teamId, cancellationToken);
+        SetEtag(response!.Version);
+        return Ok(response);
     }
 
     /// <summary>Renames a team when the authenticated user is its owner.</summary>
@@ -112,8 +116,24 @@ public sealed class TeamsController(
         }
 
         var team = await dbContext.Teams.SingleAsync(team => team.Id == teamId, cancellationToken);
+        var versionResult = CheckVersion(team.Version, "team update");
+        if (versionResult is not null)
+        {
+            return versionResult;
+        }
+
         team.Name = request.Name.Trim();
-        await dbContext.SaveChangesAsync(cancellationToken);
+        team.Version++;
+        try
+        {
+            await dbContext.SaveChangesAsync(cancellationToken);
+        }
+        catch (DbUpdateConcurrencyException)
+        {
+            return TeamChanged();
+        }
+
+        SetEtag(team.Version);
         return Ok(await BuildResponse(teamId, cancellationToken));
     }
 
@@ -128,6 +148,12 @@ public sealed class TeamsController(
         }
 
         var team = await dbContext.Teams.SingleAsync(team => team.Id == teamId, cancellationToken);
+        var versionResult = CheckVersion(team.Version, "team deletion");
+        if (versionResult is not null)
+        {
+            return versionResult;
+        }
+
         dbContext.Teams.Remove(team);
         securityAudit.Record(
             SecurityAuditActions.TeamDeleted,
@@ -135,7 +161,15 @@ public sealed class TeamsController(
             team.Id,
             team.Id,
             new { team.Name });
-        await dbContext.SaveChangesAsync(cancellationToken);
+        try
+        {
+            await dbContext.SaveChangesAsync(cancellationToken);
+        }
+        catch (DbUpdateConcurrencyException)
+        {
+            return TeamChanged();
+        }
+
         return NoContent();
     }
 
@@ -172,6 +206,13 @@ public sealed class TeamsController(
             return ownerResult;
         }
 
+        var team = await dbContext.Teams.SingleAsync(candidate => candidate.Id == teamId, cancellationToken);
+        var versionResult = CheckVersion(team.Version, "team invitation");
+        if (versionResult is not null)
+        {
+            return versionResult;
+        }
+
         var userId = Guid.NewGuid();
         var joinedAt = timeProvider.GetUtcNow().UtcDateTime;
         var (credential, apiKey) = ApiKeysController.CreateCredential(
@@ -190,14 +231,23 @@ public sealed class TeamsController(
             ],
         };
         dbContext.Users.Add(user);
+        team.Version++;
         securityAudit.Record(
             SecurityAuditActions.UserInvited,
             SecurityAuditTargets.User,
             user.Id,
             teamId,
             new { user.DisplayName, CredentialId = credential.Id, credential.Name, credential.ExpiresAt });
-        await dbContext.SaveChangesAsync(cancellationToken);
+        try
+        {
+            await dbContext.SaveChangesAsync(cancellationToken);
+        }
+        catch (DbUpdateConcurrencyException)
+        {
+            return TeamChanged();
+        }
 
+        SetEtag(team.Version);
         return CreatedAtAction(
             nameof(Get),
             new { teamId },
@@ -227,6 +277,13 @@ public sealed class TeamsController(
             return ownerResult;
         }
 
+        var team = await dbContext.Teams.SingleAsync(candidate => candidate.Id == teamId, cancellationToken);
+        var versionResult = CheckVersion(team.Version, "membership update");
+        if (versionResult is not null)
+        {
+            return versionResult;
+        }
+
         var user = await dbContext.Users.FindAsync([request.UserId], cancellationToken);
         if (user is null)
         {
@@ -247,6 +304,7 @@ public sealed class TeamsController(
             JoinedAt = timeProvider.GetUtcNow().UtcDateTime,
         };
         dbContext.TeamMemberships.Add(membership);
+        team.Version++;
         securityAudit.Record(
             SecurityAuditActions.TeamMemberAdded,
             SecurityAuditTargets.TeamMembership,
@@ -258,6 +316,10 @@ public sealed class TeamsController(
         {
             await dbContext.SaveChangesAsync(cancellationToken);
         }
+        catch (DbUpdateConcurrencyException)
+        {
+            return TeamChanged();
+        }
         catch (DbUpdateException exception)
             when (exception.InnerException is SqliteException
             { SqliteExtendedErrorCode: SqliteConstraintPrimaryKey })
@@ -265,6 +327,7 @@ public sealed class TeamsController(
             return Problem("The user is already a team member.", statusCode: StatusCodes.Status409Conflict);
         }
 
+        SetEtag(team.Version);
         return CreatedAtAction(
             nameof(Get),
             new { teamId },
@@ -284,7 +347,13 @@ public sealed class TeamsController(
             return ownerResult;
         }
 
-        var team = await dbContext.Teams.AsNoTracking().SingleAsync(team => team.Id == teamId, cancellationToken);
+        var team = await dbContext.Teams.SingleAsync(team => team.Id == teamId, cancellationToken);
+        var versionResult = CheckVersion(team.Version, "membership deletion");
+        if (versionResult is not null)
+        {
+            return versionResult;
+        }
+
         if (team.OwnerId == userId)
         {
             return Problem("The team owner cannot be removed.", statusCode: StatusCodes.Status409Conflict);
@@ -316,14 +385,73 @@ public sealed class TeamsController(
         }
 
         dbContext.TeamMemberships.Remove(membership);
+        team.Version++;
         securityAudit.Record(
             SecurityAuditActions.TeamMemberRemoved,
             SecurityAuditTargets.TeamMembership,
             userId,
             teamId,
             new { RemovedPermissionCount = notePermissions.Length });
-        await dbContext.SaveChangesAsync(cancellationToken);
+        try
+        {
+            await dbContext.SaveChangesAsync(cancellationToken);
+        }
+        catch (DbUpdateConcurrencyException)
+        {
+            return TeamChanged();
+        }
+
+        SetEtag(team.Version);
         return NoContent();
+    }
+
+    /// <summary>Transfers ownership to an existing member while preserving both users' membership.</summary>
+    [HttpPut("{teamId:guid}/owner")]
+    public async Task<ActionResult<TeamResponse>> TransferOwnership(
+        Guid teamId,
+        TransferTeamOwnershipRequest request,
+        CancellationToken cancellationToken)
+    {
+        var ownerResult = await CheckOwner(teamId, User.GetUserId(), cancellationToken);
+        if (ownerResult is not null)
+        {
+            return ownerResult;
+        }
+
+        var team = await dbContext.Teams.SingleAsync(candidate => candidate.Id == teamId, cancellationToken);
+        var versionResult = CheckVersion(team.Version, "ownership transfer");
+        if (versionResult is not null)
+        {
+            return versionResult;
+        }
+
+        if (!await dbContext.TeamMemberships.AnyAsync(
+                membership => membership.TeamId == teamId && membership.UserId == request.UserId,
+                cancellationToken))
+        {
+            return Problem("The new owner must be a current team member.", statusCode: StatusCodes.Status409Conflict);
+        }
+
+        var previousOwnerId = team.OwnerId;
+        team.OwnerId = request.UserId;
+        team.Version++;
+        securityAudit.Record(
+            SecurityAuditActions.TeamOwnershipTransferred,
+            SecurityAuditTargets.Team,
+            team.Id,
+            team.Id,
+            new { PreviousOwnerId = previousOwnerId, NewOwnerId = request.UserId });
+        try
+        {
+            await dbContext.SaveChangesAsync(cancellationToken);
+        }
+        catch (DbUpdateConcurrencyException)
+        {
+            return TeamChanged();
+        }
+
+        SetEtag(team.Version);
+        return Ok(await BuildResponse(teamId, cancellationToken));
     }
 
     /// <summary>Returns an HTTP error when a team is missing or a user is not a current member.</summary>
@@ -367,6 +495,7 @@ public sealed class TeamsController(
                 team.Name,
                 team.OwnerId,
                 team.CreatedAt,
+                team.Version,
                 team.Memberships
                     .OrderBy(membership => membership.User.DisplayName)
                     .Select(membership => new TeamMemberResponse(
@@ -375,4 +504,29 @@ public sealed class TeamsController(
                         membership.JoinedAt))
                     .ToArray()))
             .SingleOrDefaultAsync(cancellationToken);
+
+    /// <summary>Requires the caller's strong entity tag to match the current team version.</summary>
+    private ActionResult? CheckVersion(int currentVersion, string operation)
+    {
+        if (!Request.Headers.TryGetValue("If-Match", out var ifMatch))
+        {
+            return Problem(
+                $"If-Match is required for {operation}.",
+                statusCode: StatusCodes.Status428PreconditionRequired);
+        }
+
+        if (!EntityTagPolicy.TryParse(ifMatch.ToString(), out var expectedVersion))
+        {
+            return Problem("If-Match must contain a quoted resource version.", statusCode: StatusCodes.Status400BadRequest);
+        }
+
+        return currentVersion == expectedVersion ? null : TeamChanged();
+    }
+
+    /// <summary>Returns the standard stale-team precondition response.</summary>
+    private ActionResult TeamChanged() =>
+        Problem("The team changed after it was read.", statusCode: StatusCodes.Status412PreconditionFailed);
+
+    /// <summary>Writes a strong entity tag containing the current team version.</summary>
+    private void SetEtag(int version) => Response.Headers.ETag = EntityTagPolicy.Format(version);
 }

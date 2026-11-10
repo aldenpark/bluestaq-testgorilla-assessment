@@ -1,6 +1,7 @@
 using System.Net;
 using System.Text.Json;
 using Microsoft.AspNetCore.Hosting;
+using Microsoft.Extensions.Configuration;
 
 namespace Bluestaq.Notes.Api.Tests;
 
@@ -31,6 +32,7 @@ public sealed class SwaggerTests(NotesApiFactory factory) : IClassFixture<NotesA
 
         var paths = root.GetProperty("paths");
         var createTeam = paths.GetProperty("/api/teams").GetProperty("post");
+        Assert.True(paths.TryGetProperty("/api/v1/teams", out _));
         Assert.Equal(
             "Creates a team owned by the authenticated user and adds that user as its first member.",
             createTeam.GetProperty("summary").GetString());
@@ -39,12 +41,23 @@ public sealed class SwaggerTests(NotesApiFactory factory) : IClassFixture<NotesA
         var updateNote = paths.GetProperty("/api/notes/{noteId}").GetProperty("put");
         Assert.True(updateNote.GetProperty("responses").TryGetProperty("412", out _));
         Assert.True(updateNote.GetProperty("responses").TryGetProperty("428", out _));
+        Assert.True(updateNote.GetProperty("responses").TryGetProperty("413", out _));
+        Assert.True(updateNote.GetProperty("responses").TryGetProperty("429", out _));
     }
 
     [Fact]
     public async Task Swagger_IsDisabledOutsideDevelopment()
     {
-        using var productionFactory = factory.WithWebHostBuilder(builder => builder.UseEnvironment("Production"));
+        using var productionFactory = factory.WithWebHostBuilder(builder =>
+        {
+            builder.UseEnvironment("Production");
+            builder.ConfigureAppConfiguration((_, configuration) => configuration.AddInMemoryCollection(
+                new Dictionary<string, string?>
+                {
+                    ["Hardening:AuditIntegrityKey"] =
+                        "MDEyMzQ1Njc4OWFiY2RlZjAxMjM0NTY3ODlhYmNkZWY=",
+                }));
+        });
         using var client = productionFactory.CreateClient();
 
         Assert.Equal(HttpStatusCode.NotFound, (await client.GetAsync("/swagger/index.html")).StatusCode);

@@ -13,6 +13,7 @@ namespace Bluestaq.Notes.Api.Controllers;
 [Authorize]
 [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status401Unauthorized)]
 [Route("api/api-keys")]
+[Route("api/v1/api-keys")]
 public sealed class ApiKeysController(
     NotesDbContext dbContext,
     SecurityAudit securityAudit,

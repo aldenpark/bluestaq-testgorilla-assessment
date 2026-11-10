@@ -9,6 +9,7 @@ public static class SecurityAuditActions
 {
     public const string TeamCreated = "team.created";
     public const string TeamDeleted = "team.deleted";
+    public const string TeamOwnershipTransferred = "team.ownership-transferred";
     public const string UserInvited = "user.invited";
     public const string TeamMemberAdded = "team.member-added";
     public const string TeamMemberRemoved = "team.member-removed";
@@ -33,7 +34,8 @@ public static class SecurityAuditTargets
 public sealed class SecurityAudit(
     NotesDbContext dbContext,
     IHttpContextAccessor httpContextAccessor,
-    TimeProvider timeProvider)
+    TimeProvider timeProvider,
+    SecurityAuditIntegrity integrity)
 {
     /// <summary>Adds a security event to the current database transaction with actor and trace metadata.</summary>
     public void Record(
@@ -46,7 +48,7 @@ public sealed class SecurityAudit(
         var httpContext = httpContextAccessor.HttpContext
             ?? throw new InvalidOperationException("An active HTTP request is required.");
 
-        dbContext.SecurityAuditEvents.Add(new SecurityAuditEvent
+        var auditEvent = new SecurityAuditEvent
         {
             Id = Guid.NewGuid(),
             OccurredAt = timeProvider.GetUtcNow().UtcDateTime,
@@ -58,6 +60,9 @@ public sealed class SecurityAudit(
             TargetId = targetId,
             TraceId = httpContext.TraceIdentifier,
             Details = details is null ? "{}" : JsonSerializer.Serialize(details, JsonSerializerOptions.Web),
-        });
+            IntegrityHash = "pending",
+        };
+        auditEvent.IntegrityHash = integrity.Compute(auditEvent);
+        dbContext.SecurityAuditEvents.Add(auditEvent);
     }
 }

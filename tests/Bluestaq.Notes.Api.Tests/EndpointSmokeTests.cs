@@ -36,19 +36,35 @@ public sealed class EndpointSmokeTests(NotesApiFactory factory) : IClassFixture<
         Assert.Equal(HttpStatusCode.OK, (await alice.GetAsync($"/api/teams/{team.Id}")).StatusCode);
         Assert.Equal(HttpStatusCode.Forbidden, (await bob.GetAsync($"/api/teams/{team.Id}")).StatusCode);
 
-        var addBob = await alice.PostAsJsonAsync(
-            $"/api/teams/{team.Id}/members",
+        var addBob = await alice.PostTeamAsync(
+            team.Id,
+            "/members",
             new AddTeamMemberRequest { UserId = BobId });
         Assert.Equal(HttpStatusCode.Created, addBob.StatusCode);
         Assert.Equal(HttpStatusCode.OK, (await bob.GetAsync($"/api/teams/{team.Id}")).StatusCode);
+        Assert.Equal(HttpStatusCode.OK, (await alice.GetAsync("/api/v1/teams")).StatusCode);
 
-        var renameTeam = await alice.PatchAsJsonAsync(
-            $"/api/teams/{team.Id}",
+        Assert.Equal(
+            HttpStatusCode.OK,
+            (await alice.PutTeamAsync(
+                team.Id,
+                "/owner",
+                new TransferTeamOwnershipRequest { UserId = BobId })).StatusCode);
+        Assert.Equal(
+            HttpStatusCode.OK,
+            (await bob.PutTeamAsync(
+                team.Id,
+                "/owner",
+                new TransferTeamOwnershipRequest { UserId = team.OwnerId })).StatusCode);
+
+        var renameTeam = await alice.PatchTeamAsync(
+            team.Id,
             new UpdateTeamRequest { Name = "Renamed smoke team" });
         Assert.Equal(HttpStatusCode.OK, renameTeam.StatusCode);
 
-        var invite = await alice.PostAsJsonAsync(
-            $"/api/teams/{team.Id}/invitations",
+        var invite = await alice.PostTeamAsync(
+            team.Id,
+            "/invitations",
             new InviteTeamMemberRequest { DisplayName = "Charlie", KeyName = "Initial" });
         Assert.Equal(HttpStatusCode.Created, invite.StatusCode);
         var invitation = await invite.Content.ReadFromJsonAsync<InvitationResponse>();
@@ -67,8 +83,9 @@ public sealed class EndpointSmokeTests(NotesApiFactory factory) : IClassFixture<
         Assert.Equal(note.Id, Assert.Single(notes!.Items).Id);
         Assert.Equal(HttpStatusCode.OK, (await bob.GetAsync($"/api/notes/{note.Id}")).StatusCode);
 
-        var grantEditor = await alice.PutAsJsonAsync(
-            $"/api/notes/{note.Id}/permissions/{BobId}",
+        var grantEditor = await alice.PutNoteAsync(
+            note.Id,
+            $"/permissions/{BobId}",
             new SetNotePermissionRequest { Role = Bluestaq.Notes.Api.Data.NotePermissionRole.Editor });
         Assert.Equal(HttpStatusCode.OK, grantEditor.StatusCode);
         var listPermissions = await alice.GetAsync($"/api/notes/{note.Id}/permissions");
@@ -87,7 +104,7 @@ public sealed class EndpointSmokeTests(NotesApiFactory factory) : IClassFixture<
 
         Assert.Equal(
             HttpStatusCode.NoContent,
-            (await alice.DeleteAsync($"/api/notes/{note.Id}/permissions/{BobId}")).StatusCode);
+            (await alice.DeleteNoteAsync(note.Id, $"/permissions/{BobId}")).StatusCode);
 
         var createKey = await alice.PostAsJsonAsync(
             "/api/api-keys",
@@ -107,16 +124,16 @@ public sealed class EndpointSmokeTests(NotesApiFactory factory) : IClassFixture<
             HttpStatusCode.NoContent,
             (await alice.DeleteAsync($"/api/api-keys/{rotatedKey.Id}")).StatusCode);
 
-        Assert.Equal(HttpStatusCode.NoContent, (await alice.DeleteAsync($"/api/notes/{note.Id}")).StatusCode);
+        Assert.Equal(HttpStatusCode.NoContent, (await alice.DeleteNoteAsync(note.Id)).StatusCode);
         Assert.Equal(
             HttpStatusCode.NoContent,
-            (await alice.DeleteAsync($"/api/teams/{team.Id}/members/{BobId}")).StatusCode);
+            (await alice.DeleteTeamAsync(team.Id, $"/members/{BobId}")).StatusCode);
         Assert.Equal(HttpStatusCode.Forbidden, (await bob.GetAsync($"/api/teams/{team.Id}")).StatusCode);
         Assert.Equal(HttpStatusCode.OK, (await alice.GetAsync("/api/security-events")).StatusCode);
         Assert.Equal(
             HttpStatusCode.OK,
             (await alice.GetAsync($"/api/teams/{team.Id}/security-events")).StatusCode);
-        Assert.Equal(HttpStatusCode.NoContent, (await alice.DeleteAsync($"/api/teams/{team.Id}")).StatusCode);
+        Assert.Equal(HttpStatusCode.NoContent, (await alice.DeleteTeamAsync(team.Id)).StatusCode);
     }
 
     private HttpClient CreateClient(string apiKey)

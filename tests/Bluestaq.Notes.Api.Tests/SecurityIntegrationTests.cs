@@ -54,7 +54,7 @@ public sealed class SecurityIntegrationTests(NotesApiFactory factory) : IClassFi
         Assert.NotNull(note);
         Assert.Equal(HttpStatusCode.OK, (await bob.GetAsync($"/api/notes/{note.Id}")).StatusCode);
 
-        var removeResponse = await alice.DeleteAsync($"/api/teams/{team.Id}/members/{BobId}");
+        var removeResponse = await alice.DeleteTeamAsync(team.Id, $"/members/{BobId}");
 
         Assert.Equal(HttpStatusCode.NoContent, removeResponse.StatusCode);
         Assert.Equal(HttpStatusCode.Forbidden, (await bob.GetAsync($"/api/notes/{note.Id}")).StatusCode);
@@ -78,7 +78,5 @@ public sealed class SecurityIntegrationTests(NotesApiFactory factory) : IClassFi
     }
 
     private static Task<HttpResponseMessage> AddBob(HttpClient client, Guid teamId) =>
-        client.PostAsJsonAsync(
-            $"/api/teams/{teamId}/members",
-            new AddTeamMemberRequest { UserId = BobId });
+        client.PostTeamAsync(teamId, "/members", new AddTeamMemberRequest { UserId = BobId });
 }

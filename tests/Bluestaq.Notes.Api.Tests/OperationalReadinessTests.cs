@@ -60,7 +60,9 @@ public sealed class OperationalReadinessTests(NotesApiFactory factory) : IClassF
         services.AddDbContext<NotesDbContext>(options => options.UseSqlite(
             $"Data Source={Path.Combine(missingDirectory, "notes.db")};Mode=ReadOnly"));
         await using var provider = services.BuildServiceProvider();
-        var healthCheck = new DatabaseHealthCheck(provider.GetRequiredService<IServiceScopeFactory>());
+        var healthCheck = new DatabaseHealthCheck(
+            provider.GetRequiredService<IServiceScopeFactory>(),
+            TimeProvider.System);
 
         var result = await healthCheck.CheckHealthAsync(new HealthCheckContext());
 

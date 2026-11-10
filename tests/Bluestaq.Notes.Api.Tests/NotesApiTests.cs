@@ -64,7 +64,7 @@ public sealed class NotesApiTests(NotesApiFactory factory) : IClassFixture<Notes
             Assert.EndsWith("Z", persistedTimestamp);
         }
 
-        var deleteResponse = await client.DeleteAsync($"/api/notes/{created.Id}");
+        var deleteResponse = await client.DeleteNoteAsync(created.Id);
         Assert.Equal(HttpStatusCode.NoContent, deleteResponse.StatusCode);
         Assert.Equal(HttpStatusCode.NotFound, (await client.GetAsync($"/api/notes/{created.Id}")).StatusCode);
     }
@@ -154,8 +154,9 @@ public sealed class NotesApiTests(NotesApiFactory factory) : IClassFixture<Notes
         using var bob = CreateClient("dev-bob-api-key-01");
         var team = await CreateTeam(alice);
 
-        var addResponse = await alice.PostAsJsonAsync(
-            $"/api/teams/{team.Id}/members",
+        var addResponse = await alice.PostTeamAsync(
+            team.Id,
+            "/members",
             new AddTeamMemberRequest { UserId = BobId });
         Assert.Equal(HttpStatusCode.Created, addResponse.StatusCode);
         Assert.Equal(HttpStatusCode.OK, (await bob.GetAsync($"/api/teams/{team.Id}")).StatusCode);
@@ -167,10 +168,10 @@ public sealed class NotesApiTests(NotesApiFactory factory) : IClassFixture<Notes
 
         Assert.Equal(
             HttpStatusCode.Conflict,
-            (await alice.DeleteAsync($"/api/teams/{team.Id}/members/{team.OwnerId}")).StatusCode);
+            (await alice.DeleteTeamAsync(team.Id, $"/members/{team.OwnerId}")).StatusCode);
         Assert.Equal(
             HttpStatusCode.NoContent,
-            (await alice.DeleteAsync($"/api/teams/{team.Id}/members/{BobId}")).StatusCode);
+            (await alice.DeleteTeamAsync(team.Id, $"/members/{BobId}")).StatusCode);
         Assert.Equal(HttpStatusCode.Forbidden, (await bob.GetAsync($"/api/teams/{team.Id}")).StatusCode);
     }
 

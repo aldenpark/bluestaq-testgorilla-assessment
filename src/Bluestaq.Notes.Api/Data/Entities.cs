@@ -34,6 +34,7 @@ public sealed class Team
     public Guid OwnerId { get; set; }
     public User Owner { get; set; } = null!;
     public DateTime CreatedAt { get; set; }
+    public int Version { get; set; } = 1;
     public ICollection<TeamMembership> Memberships { get; set; } = [];
     public ICollection<Note> Notes { get; set; } = [];
 }
@@ -106,4 +107,12 @@ public sealed class SecurityAuditEvent
     public Guid TargetId { get; set; }
     public required string TraceId { get; set; }
     public required string Details { get; set; }
+    public required string IntegrityHash { get; set; }
+}
+
+/// <summary>Provides a durable sentinel for rollback-safe database writeability probes.</summary>
+public sealed class ReadinessProbe
+{
+    public int Id { get; set; }
+    public DateTime CheckedAt { get; set; }
 }

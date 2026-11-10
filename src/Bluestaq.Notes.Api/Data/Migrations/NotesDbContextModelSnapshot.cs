@@ -130,6 +130,27 @@ namespace Bluestaq.Notes.Api.Data.Migrations
                     b.ToTable("NotePermissions");
                 });
 
+            modelBuilder.Entity("Bluestaq.Notes.Api.Data.ReadinessProbe", b =>
+                {
+                    b.Property<int>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("INTEGER");
+
+                    b.Property<DateTime>("CheckedAt")
+                        .HasColumnType("TEXT");
+
+                    b.HasKey("Id");
+
+                    b.ToTable("ReadinessProbes");
+
+                    b.HasData(
+                        new
+                        {
+                            Id = 1,
+                            CheckedAt = new DateTime(2000, 1, 1, 0, 0, 0, 0, DateTimeKind.Utc)
+                        });
+                });
+
             modelBuilder.Entity("Bluestaq.Notes.Api.Data.SecurityAuditEvent", b =>
                 {
                     b.Property<Guid>("Id")
@@ -151,6 +172,12 @@ namespace Bluestaq.Notes.Api.Data.Migrations
                         .IsRequired()
                         .HasMaxLength(4000)
                         .HasColumnType("TEXT");
+
+                    b.Property<string>("IntegrityHash")
+                        .IsRequired()
+                        .HasMaxLength(64)
+                        .HasColumnType("TEXT")
+                        .IsFixedLength();
 
                     b.Property<DateTime>("OccurredAt")
                         .HasColumnType("TEXT");
@@ -200,6 +227,10 @@ namespace Bluestaq.Notes.Api.Data.Migrations
 
                     b.Property<Guid>("OwnerId")
                         .HasColumnType("TEXT");
+
+                    b.Property<int>("Version")
+                        .IsConcurrencyToken()
+                        .HasColumnType("INTEGER");
 
                     b.HasKey("Id");
 

@@ -22,14 +22,16 @@ public sealed class SecurityAuditTests(NotesApiFactory factory) : IClassFixture<
         var team = await CreateTeam(alice);
         Assert.Equal(
             HttpStatusCode.Created,
-            (await alice.PostAsJsonAsync(
-                $"/api/teams/{team.Id}/members",
+            (await alice.PostTeamAsync(
+                team.Id,
+                "/members",
                 new AddTeamMemberRequest { UserId = BobId })).StatusCode);
         var note = await CreateNote(alice, team.Id);
         Assert.Equal(
             HttpStatusCode.OK,
-            (await alice.PutAsJsonAsync(
-                $"/api/notes/{note.Id}/permissions/{BobId}",
+            (await alice.PutNoteAsync(
+                note.Id,
+                $"/permissions/{BobId}",
                 new SetNotePermissionRequest { Role = NotePermissionRole.Editor })).StatusCode);
 
         var createKeyResponse = await alice.PostAsJsonAsync(
@@ -81,7 +83,7 @@ public sealed class SecurityAuditTests(NotesApiFactory factory) : IClassFixture<
     {
         using var alice = CreateClient("dev-alice-api-key");
         var team = await CreateTeam(alice);
-        Assert.Equal(HttpStatusCode.NoContent, (await alice.DeleteAsync($"/api/teams/{team.Id}")).StatusCode);
+        Assert.Equal(HttpStatusCode.NoContent, (await alice.DeleteTeamAsync(team.Id)).StatusCode);
 
         var personalEvents = await ReadAllEvents(alice, "/api/security-events", 100);
         var deleted = Assert.Single(
