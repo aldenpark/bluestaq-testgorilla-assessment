@@ -44,7 +44,7 @@ dotnet test Bluestaq.Notes.slnx --filter "Category=Smoke"
 
 The smoke test calls every endpoint through the real ASP.NET Core pipeline: health, team create/list/get, membership add/remove, and note create/list/get/update/delete. It also proves that missing or invalid credentials receive `401` and that a non-member receives `403` before admission and after removal.
 
-The remaining integration tests cover validation and content limits, missing resources, authorization rules, pagination limits, and persistence through a fresh EF Core context. All 11 test cases use isolated temporary SQLite databases and require no external services.
+The remaining integration tests cover validation and content limits, missing resources, invalid credentials, owner-only membership management, immediate access revocation, pagination limits, and persistence through a fresh EF Core context. All 14 test cases use isolated temporary SQLite databases and require no external services.
 
 ## API
 
