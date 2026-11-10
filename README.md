@@ -100,6 +100,8 @@ The verified 2026-11-10 scan found no vulnerable packages in either the API or t
 
 GitHub Actions runs these checks for every pull request and push to `main`. The workflows verify formatting, restore local tools, treat Release build warnings as errors, reject pending EF model changes, scan direct/transitive packages for CVEs and committed secrets, run CodeQL, run all tests, enforce 90% line and 70% branch coverage, and smoke-test the production container. Actions are pinned to immutable commit SHAs; Dependabot tracks NuGet, Docker, and workflow updates. CVE JSON, TRX, and Cobertura reports are uploaded as artifacts.
 
+At submission, `main` passes CI and CodeQL. Two unmerged Dependabot pull requests independently propose the .NET 11 SDK and ASP.NET runtime container images while the application and `global.json` remain pinned to .NET 10. Their failed container checks are expected: the SDK-only update cannot satisfy the pinned 10.0.402 SDK, and the runtime-only update cannot run a .NET 10 application. This demonstrates the release gate rejecting partial framework upgrades; a .NET major-version migration must update the SDK, runtime, target framework, and toolchain together.
+
 ## API
 
 Except for health, every endpoint requires `X-Api-Key`.
@@ -388,6 +390,7 @@ With more time I would, in this order:
 1. Add OIDC federation, fine-grained credential scopes, and organization-specific recovery approval.
 2. Add immutable note-change history or soft deletion if product requirements justify it.
 3. Move to PostgreSQL when measured write contention or dataset size warrants it. In a multi-instance deployment, run migrations as a controlled release step instead of application startup.
+4. Treat framework major versions as coordinated migration work: group or suppress isolated Docker major-version updates until the SDK, runtime, target framework, and supporting packages can be upgraded and tested together.
 
 ## Known limitations
 
