@@ -21,6 +21,8 @@ public sealed class NotesDbContext(DbContextOptions<NotesDbContext> options) : D
         modelBuilder.Entity<Team>(entity =>
         {
             entity.Property(team => team.Name).HasMaxLength(100);
+            entity.Property(team => team.CreatedAt)
+                .HasConversion(value => value, value => DateTime.SpecifyKind(value, DateTimeKind.Utc));
             entity.HasOne(team => team.Owner)
                 .WithMany()
                 .HasForeignKey(team => team.OwnerId)
@@ -30,6 +32,8 @@ public sealed class NotesDbContext(DbContextOptions<NotesDbContext> options) : D
         modelBuilder.Entity<TeamMembership>(entity =>
         {
             entity.HasKey(membership => new { membership.TeamId, membership.UserId });
+            entity.Property(membership => membership.JoinedAt)
+                .HasConversion(value => value, value => DateTime.SpecifyKind(value, DateTimeKind.Utc));
             entity.HasOne(membership => membership.Team)
                 .WithMany(team => team.Memberships)
                 .HasForeignKey(membership => membership.TeamId)
@@ -45,6 +49,10 @@ public sealed class NotesDbContext(DbContextOptions<NotesDbContext> options) : D
         {
             entity.Property(note => note.Title).HasMaxLength(200);
             entity.Property(note => note.Content).HasMaxLength(10_000);
+            entity.Property(note => note.CreatedAt)
+                .HasConversion(value => value, value => DateTime.SpecifyKind(value, DateTimeKind.Utc));
+            entity.Property(note => note.UpdatedAt)
+                .HasConversion(value => value, value => DateTime.SpecifyKind(value, DateTimeKind.Utc));
             entity.HasIndex(note => new { note.TeamId, note.UpdatedAt });
             entity.HasOne(note => note.Team)
                 .WithMany(team => team.Notes)

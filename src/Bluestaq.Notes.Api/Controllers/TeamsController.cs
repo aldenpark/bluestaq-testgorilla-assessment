@@ -3,6 +3,7 @@ using Bluestaq.Notes.Api.Contracts;
 using Bluestaq.Notes.Api.Data;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
+using Microsoft.Data.Sqlite;
 using Microsoft.EntityFrameworkCore;
 
 namespace Bluestaq.Notes.Api.Controllers;
@@ -12,6 +13,8 @@ namespace Bluestaq.Notes.Api.Controllers;
 [Route("api/teams")]
 public sealed class TeamsController(NotesDbContext dbContext) : ControllerBase
 {
+    private const int SqliteConstraintPrimaryKey = 1555;
+
     [HttpPost]
     public async Task<ActionResult<TeamResponse>> Create(
         CreateTeamRequest request,
@@ -95,14 +98,14 @@ public sealed class TeamsController(NotesDbContext dbContext) : ControllerBase
         var user = await dbContext.Users.FindAsync([request.UserId], cancellationToken);
         if (user is null)
         {
-            return NotFound(Problem("The user does not exist.", statusCode: StatusCodes.Status404NotFound));
+            return Problem("The user does not exist.", statusCode: StatusCodes.Status404NotFound);
         }
 
         if (await dbContext.TeamMemberships.AnyAsync(
                 membership => membership.TeamId == teamId && membership.UserId == request.UserId,
                 cancellationToken))
         {
-            return Conflict(Problem("The user is already a team member.", statusCode: StatusCodes.Status409Conflict));
+            return Problem("The user is already a team member.", statusCode: StatusCodes.Status409Conflict);
         }
 
         var membership = new TeamMembership
@@ -117,9 +120,11 @@ public sealed class TeamsController(NotesDbContext dbContext) : ControllerBase
         {
             await dbContext.SaveChangesAsync(cancellationToken);
         }
-        catch (DbUpdateException)
+        catch (DbUpdateException exception)
+            when (exception.InnerException is SqliteException
+            { SqliteExtendedErrorCode: SqliteConstraintPrimaryKey })
         {
-            return Conflict(Problem("The user is already a team member.", statusCode: StatusCodes.Status409Conflict));
+            return Problem("The user is already a team member.", statusCode: StatusCodes.Status409Conflict);
         }
 
         return CreatedAtAction(
@@ -143,13 +148,13 @@ public sealed class TeamsController(NotesDbContext dbContext) : ControllerBase
         var team = await dbContext.Teams.AsNoTracking().SingleAsync(team => team.Id == teamId, cancellationToken);
         if (team.OwnerId == userId)
         {
-            return Conflict(Problem("The team owner cannot be removed.", statusCode: StatusCodes.Status409Conflict));
+            return Problem("The team owner cannot be removed.", statusCode: StatusCodes.Status409Conflict);
         }
 
         var membership = await dbContext.TeamMemberships.FindAsync([teamId, userId], cancellationToken);
         if (membership is null)
         {
-            return NotFound(Problem("The team membership does not exist.", statusCode: StatusCodes.Status404NotFound));
+            return Problem("The team membership does not exist.", statusCode: StatusCodes.Status404NotFound);
         }
 
         dbContext.TeamMemberships.Remove(membership);
@@ -161,7 +166,7 @@ public sealed class TeamsController(NotesDbContext dbContext) : ControllerBase
     {
         if (!await dbContext.Teams.AnyAsync(team => team.Id == teamId, cancellationToken))
         {
-            return NotFound(Problem("The team does not exist.", statusCode: StatusCodes.Status404NotFound));
+            return Problem("The team does not exist.", statusCode: StatusCodes.Status404NotFound);
         }
 
         return await dbContext.TeamMemberships.AnyAsync(
@@ -180,7 +185,7 @@ public sealed class TeamsController(NotesDbContext dbContext) : ControllerBase
 
         return ownerId switch
         {
-            null => NotFound(Problem("The team does not exist.", statusCode: StatusCodes.Status404NotFound)),
+            null => Problem("The team does not exist.", statusCode: StatusCodes.Status404NotFound),
             var id when id != userId => Forbid(),
             _ => null,
         };

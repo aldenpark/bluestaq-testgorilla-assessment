@@ -79,10 +79,17 @@ public sealed class NotesController(NotesDbContext dbContext) : ControllerBase
 
         var query = dbContext.Notes.AsNoTracking().Where(note => note.TeamId == teamId);
         var totalCount = await query.CountAsync(cancellationToken);
+        var offset = ((long)page - 1) * pageSize;
+        if (offset > int.MaxValue)
+        {
+            ModelState.AddModelError(nameof(page), "The requested page is too large.");
+            return ValidationProblem(ModelState);
+        }
+
         var notes = await query
             .OrderByDescending(note => note.UpdatedAt)
             .ThenBy(note => note.Id)
-            .Skip((page - 1) * pageSize)
+            .Skip((int)offset)
             .Take(pageSize)
             .Select(note => new NoteResponse(
                 note.Id,
@@ -104,7 +111,7 @@ public sealed class NotesController(NotesDbContext dbContext) : ControllerBase
         var note = await dbContext.Notes.AsNoTracking().SingleOrDefaultAsync(note => note.Id == noteId, cancellationToken);
         if (note is null)
         {
-            return NotFound(Problem("The note does not exist.", statusCode: StatusCodes.Status404NotFound));
+            return Problem("The note does not exist.", statusCode: StatusCodes.Status404NotFound);
         }
 
         if (!await IsMember(note.TeamId, cancellationToken))
@@ -130,7 +137,7 @@ public sealed class NotesController(NotesDbContext dbContext) : ControllerBase
         var note = await dbContext.Notes.SingleOrDefaultAsync(note => note.Id == noteId, cancellationToken);
         if (note is null)
         {
-            return NotFound(Problem("The note does not exist.", statusCode: StatusCodes.Status404NotFound));
+            return Problem("The note does not exist.", statusCode: StatusCodes.Status404NotFound);
         }
 
         if (!await IsMember(note.TeamId, cancellationToken))
@@ -152,7 +159,7 @@ public sealed class NotesController(NotesDbContext dbContext) : ControllerBase
         var note = await dbContext.Notes.SingleOrDefaultAsync(note => note.Id == noteId, cancellationToken);
         if (note is null)
         {
-            return NotFound(Problem("The note does not exist.", statusCode: StatusCodes.Status404NotFound));
+            return Problem("The note does not exist.", statusCode: StatusCodes.Status404NotFound);
         }
 
         if (!await IsMember(note.TeamId, cancellationToken))
@@ -169,7 +176,7 @@ public sealed class NotesController(NotesDbContext dbContext) : ControllerBase
     {
         if (!await dbContext.Teams.AnyAsync(team => team.Id == teamId, cancellationToken))
         {
-            return NotFound(Problem("The team does not exist.", statusCode: StatusCodes.Status404NotFound));
+            return Problem("The team does not exist.", statusCode: StatusCodes.Status404NotFound);
         }
 
         return await IsMember(teamId, cancellationToken) ? null : Forbid();

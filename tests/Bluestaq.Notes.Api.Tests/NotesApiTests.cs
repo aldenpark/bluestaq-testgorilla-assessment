@@ -1,11 +1,15 @@
 using System.Net;
 using System.Net.Http.Json;
+using System.Text.Json;
 using Bluestaq.Notes.Api.Auth;
 using Bluestaq.Notes.Api.Contracts;
+using Microsoft.AspNetCore.Http;
+using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
 
 namespace Bluestaq.Notes.Api.Tests;
 
+[Trait("Category", "Integration")]
 public sealed class NotesApiTests(NotesApiFactory factory) : IClassFixture<NotesApiFactory>
 {
     private static readonly Guid BobId = Guid.Parse("22222222-2222-2222-2222-222222222222");
@@ -46,10 +50,17 @@ public sealed class NotesApiTests(NotesApiFactory factory) : IClassFixture<Notes
         Assert.Equal("Updated decision", updated?.Title);
         Assert.True(updated?.UpdatedAt >= created.UpdatedAt);
 
-        var list = await client.GetFromJsonAsync<PagedNotesResponse>($"/api/teams/{team.Id}/notes");
+        var listResponse = await client.GetAsync($"/api/teams/{team.Id}/notes");
+        var listJson = await listResponse.Content.ReadAsStringAsync();
+        var list = JsonSerializer.Deserialize<PagedNotesResponse>(listJson, JsonSerializerOptions.Web);
         Assert.NotNull(list);
         Assert.Equal(1, list.TotalCount);
         Assert.Equal(created.Id, Assert.Single(list.Items).Id);
+        using (var document = JsonDocument.Parse(listJson))
+        {
+            var persistedTimestamp = document.RootElement.GetProperty("items")[0].GetProperty("createdAt").GetString();
+            Assert.EndsWith("Z", persistedTimestamp);
+        }
 
         var deleteResponse = await client.DeleteAsync($"/api/notes/{created.Id}");
         Assert.Equal(HttpStatusCode.NoContent, deleteResponse.StatusCode);
@@ -107,7 +118,12 @@ public sealed class NotesApiTests(NotesApiFactory factory) : IClassFixture<Notes
     {
         using var client = CreateClient("dev-alice-api-key");
 
-        Assert.Equal(HttpStatusCode.NotFound, (await client.GetAsync($"/api/notes/{Guid.NewGuid()}")).StatusCode);
+        var missingNoteResponse = await client.GetAsync($"/api/notes/{Guid.NewGuid()}");
+        Assert.Equal(HttpStatusCode.NotFound, missingNoteResponse.StatusCode);
+        Assert.Equal("application/problem+json", missingNoteResponse.Content.Headers.ContentType?.MediaType);
+        var problem = await missingNoteResponse.Content.ReadFromJsonAsync<ProblemDetails>();
+        Assert.Equal(StatusCodes.Status404NotFound, problem?.Status);
+        Assert.Equal("The note does not exist.", problem?.Detail);
         Assert.Equal(
             HttpStatusCode.NotFound,
             (await client.GetAsync($"/api/teams/{Guid.NewGuid()}/notes")).StatusCode);
@@ -165,6 +181,9 @@ public sealed class NotesApiTests(NotesApiFactory factory) : IClassFixture<Notes
         var response = await client.GetAsync($"/api/teams/{team.Id}/notes?page=0&pageSize=101");
 
         Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+        Assert.Equal(
+            HttpStatusCode.BadRequest,
+            (await client.GetAsync($"/api/teams/{team.Id}/notes?page={int.MaxValue}&pageSize=100")).StatusCode);
     }
 
     private HttpClient CreateClient(string apiKey)
