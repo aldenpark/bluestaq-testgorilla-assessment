@@ -218,16 +218,33 @@ public sealed class ManagedCollaborationTests(NotesApiFactory factory) : IClassF
             await migrator.MigrateAsync("20261110173858_InitialCreate");
 
             var userId = Guid.NewGuid();
+            var teamId = Guid.NewGuid();
+            var noteId = Guid.NewGuid();
             const string legacyHash = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
             await db.Database.ExecuteSqlInterpolatedAsync($$"""
                 INSERT INTO "Users" ("Id", "DisplayName", "ApiKeyHash")
                 VALUES ({{userId}}, 'Legacy user', {{legacyHash}})
+                """);
+            await db.Database.ExecuteSqlInterpolatedAsync($$"""
+                INSERT INTO "Teams" ("Id", "Name", "OwnerId", "CreatedAt")
+                VALUES ({{teamId}}, 'Legacy team', {{userId}}, {{DateTime.UtcNow}})
+                """);
+            await db.Database.ExecuteSqlInterpolatedAsync($$"""
+                INSERT INTO "Notes" (
+                    "Id", "TeamId", "Title", "Content", "CreatedById", "UpdatedById", "CreatedAt", "UpdatedAt")
+                VALUES (
+                    {{noteId}}, {{teamId}}, 'Legacy note', 'Legacy content', {{userId}}, {{userId}},
+                    {{DateTime.UtcNow}}, {{DateTime.UtcNow}})
                 """);
 
             await migrator.MigrateAsync();
             Assert.Equal(
                 legacyHash,
                 await db.ApiKeys.Where(key => key.UserId == userId).Select(key => key.KeyHash).SingleAsync());
+            var migratedNote = await db.Notes.SingleAsync(note => note.Id == noteId);
+            Assert.Equal(NoteVisibility.Team, migratedNote.Visibility);
+            Assert.Equal(1, migratedNote.Version);
+            Assert.Equal(1, await db.Users.Where(user => user.Id == userId).Select(user => user.CredentialVersion).SingleAsync());
 
             await migrator.MigrateAsync("20261110173858_InitialCreate");
             var restoredHash = await db.Database.SqlQuery<string>($$"""
@@ -281,8 +298,15 @@ public sealed class ManagedCollaborationTests(NotesApiFactory factory) : IClassF
         return (await response.Content.ReadFromJsonAsync<NoteResponse>())!;
     }
 
-    private static Task<HttpResponseMessage> UpdateNote(HttpClient client, Guid noteId) =>
-        client.PutAsJsonAsync(
-            $"/api/notes/{noteId}",
-            new UpdateNoteRequest { Title = "Edited", Content = "Editor content" });
+    private static async Task<HttpResponseMessage> UpdateNote(HttpClient client, Guid noteId)
+    {
+        using var current = await client.GetAsync($"/api/notes/{noteId}");
+        var request = new HttpRequestMessage(HttpMethod.Put, $"/api/notes/{noteId}")
+        {
+            Content = JsonContent.Create(
+                new UpdateNoteRequest { Title = "Edited", Content = "Editor content" }),
+        };
+        request.Headers.TryAddWithoutValidation("If-Match", current.Headers.ETag?.Tag);
+        return await client.SendAsync(request);
+    }
 }

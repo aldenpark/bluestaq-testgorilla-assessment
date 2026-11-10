@@ -38,6 +38,23 @@ jobs:
       - name: Restore dependencies
         run: dotnet restore Bluestaq.Notes.slnx
 
+      - name: Restore local tools
+        run: dotnet tool restore
+
+      - name: Verify formatting
+        run: dotnet format Bluestaq.Notes.slnx --no-restore --verify-no-changes
+
+      - name: Build with warnings as errors
+        run: dotnet build Bluestaq.Notes.slnx --no-restore --configuration Release --warnaserror
+
+      - name: Verify EF model matches migrations
+        run: >-
+          dotnet tool run dotnet-ef migrations has-pending-model-changes
+          --project src/Bluestaq.Notes.Api
+          --startup-project src/Bluestaq.Notes.Api
+          --configuration Release
+          --no-build
+
       - name: Scan NuGet dependencies for CVEs
         shell: bash
         run: |
@@ -58,6 +75,7 @@ jobs:
         run: >-
           dotnet test Bluestaq.Notes.slnx
           --no-restore
+          --no-build
           --configuration Release
           --collect:"XPlat Code Coverage"
           --results-directory TestResults

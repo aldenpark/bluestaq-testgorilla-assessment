@@ -9,13 +9,19 @@ using Microsoft.EntityFrameworkCore;
 
 namespace Bluestaq.Notes.Api.Controllers;
 
+/// <summary>Manages teams, ownership-restricted administration, invitations, and membership.</summary>
 [ApiController]
 [Authorize]
+[ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status401Unauthorized)]
 [Route("api/teams")]
-public sealed class TeamsController(NotesDbContext dbContext, SecurityAudit securityAudit) : ControllerBase
+public sealed class TeamsController(
+    NotesDbContext dbContext,
+    SecurityAudit securityAudit,
+    TimeProvider timeProvider) : ControllerBase
 {
     private const int SqliteConstraintPrimaryKey = 1555;
 
+    /// <summary>Creates a team owned by the authenticated user and adds that user as its first member.</summary>
     [HttpPost]
     public async Task<ActionResult<TeamResponse>> Create(
         CreateTeamRequest request,
@@ -28,7 +34,7 @@ public sealed class TeamsController(NotesDbContext dbContext, SecurityAudit secu
         }
 
         var userId = User.GetUserId();
-        var now = DateTime.UtcNow;
+        var now = timeProvider.GetUtcNow().UtcDateTime;
         var team = new Team
         {
             Id = Guid.NewGuid(),
@@ -53,6 +59,7 @@ public sealed class TeamsController(NotesDbContext dbContext, SecurityAudit secu
         return CreatedAtAction(nameof(Get), new { teamId = team.Id }, await BuildResponse(team.Id, cancellationToken));
     }
 
+    /// <summary>Lists every team where the authenticated user is a current member.</summary>
     [HttpGet]
     public async Task<ActionResult<IReadOnlyCollection<TeamResponse>>> List(CancellationToken cancellationToken)
     {
@@ -72,6 +79,7 @@ public sealed class TeamsController(NotesDbContext dbContext, SecurityAudit secu
         return Ok(teams);
     }
 
+    /// <summary>Returns a team and its members when the authenticated user belongs to it.</summary>
     [HttpGet("{teamId:guid}")]
     public async Task<ActionResult<TeamResponse>> Get(Guid teamId, CancellationToken cancellationToken)
     {
@@ -84,6 +92,7 @@ public sealed class TeamsController(NotesDbContext dbContext, SecurityAudit secu
         return Ok(await BuildResponse(teamId, cancellationToken));
     }
 
+    /// <summary>Renames a team when the authenticated user is its owner.</summary>
     [HttpPatch("{teamId:guid}")]
     public async Task<ActionResult<TeamResponse>> Update(
         Guid teamId,
@@ -108,6 +117,7 @@ public sealed class TeamsController(NotesDbContext dbContext, SecurityAudit secu
         return Ok(await BuildResponse(teamId, cancellationToken));
     }
 
+    /// <summary>Deletes a team and records the owner-authorized security event.</summary>
     [HttpDelete("{teamId:guid}")]
     public async Task<IActionResult> Delete(Guid teamId, CancellationToken cancellationToken)
     {
@@ -129,6 +139,7 @@ public sealed class TeamsController(NotesDbContext dbContext, SecurityAudit secu
         return NoContent();
     }
 
+    /// <summary>Creates a new user, team membership, and initial API key for an owner-issued invitation.</summary>
     [HttpPost("{teamId:guid}/invitations")]
     public async Task<ActionResult<InvitationResponse>> Invite(
         Guid teamId,
@@ -145,7 +156,7 @@ public sealed class TeamsController(NotesDbContext dbContext, SecurityAudit secu
             ModelState.AddModelError(nameof(request.KeyName), "KeyName must contain non-whitespace characters.");
         }
 
-        if (request.ExpiresAt <= DateTime.UtcNow)
+        if (request.ExpiresAt <= timeProvider.GetUtcNow().UtcDateTime)
         {
             ModelState.AddModelError(nameof(request.ExpiresAt), "ExpiresAt must be in the future.");
         }
@@ -162,11 +173,12 @@ public sealed class TeamsController(NotesDbContext dbContext, SecurityAudit secu
         }
 
         var userId = Guid.NewGuid();
-        var joinedAt = DateTime.UtcNow;
+        var joinedAt = timeProvider.GetUtcNow().UtcDateTime;
         var (credential, apiKey) = ApiKeysController.CreateCredential(
             userId,
             request.KeyName,
-            request.ExpiresAt);
+            request.ExpiresAt,
+            joinedAt);
         var user = new User
         {
             Id = userId,
@@ -196,6 +208,7 @@ public sealed class TeamsController(NotesDbContext dbContext, SecurityAudit secu
                 ApiKeysController.ToCreatedResponse(credential, apiKey)));
     }
 
+    /// <summary>Adds an existing user to a team when requested by the team owner.</summary>
     [HttpPost("{teamId:guid}/members")]
     public async Task<ActionResult<TeamMemberResponse>> AddMember(
         Guid teamId,
@@ -231,7 +244,7 @@ public sealed class TeamsController(NotesDbContext dbContext, SecurityAudit secu
         {
             TeamId = teamId,
             UserId = request.UserId,
-            JoinedAt = DateTime.UtcNow,
+            JoinedAt = timeProvider.GetUtcNow().UtcDateTime,
         };
         dbContext.TeamMemberships.Add(membership);
         securityAudit.Record(
@@ -258,6 +271,7 @@ public sealed class TeamsController(NotesDbContext dbContext, SecurityAudit secu
             new TeamMemberResponse(user.Id, user.DisplayName, membership.JoinedAt));
     }
 
+    /// <summary>Removes a non-owner member and clears their note permissions within the team.</summary>
     [HttpDelete("{teamId:guid}/members/{userId:guid}")]
     public async Task<IActionResult> RemoveMember(
         Guid teamId,
@@ -312,6 +326,7 @@ public sealed class TeamsController(NotesDbContext dbContext, SecurityAudit secu
         return NoContent();
     }
 
+    /// <summary>Returns an HTTP error when a team is missing or a user is not a current member.</summary>
     private async Task<ActionResult?> CheckMembership(Guid teamId, Guid userId, CancellationToken cancellationToken)
     {
         if (!await dbContext.Teams.AnyAsync(team => team.Id == teamId, cancellationToken))
@@ -326,6 +341,7 @@ public sealed class TeamsController(NotesDbContext dbContext, SecurityAudit secu
             : Forbid();
     }
 
+    /// <summary>Returns an HTTP error when a team is missing or a user is not its owner.</summary>
     private async Task<ActionResult?> CheckOwner(Guid teamId, Guid userId, CancellationToken cancellationToken)
     {
         var ownerId = await dbContext.Teams
@@ -341,6 +357,7 @@ public sealed class TeamsController(NotesDbContext dbContext, SecurityAudit secu
         };
     }
 
+    /// <summary>Builds the API representation of a team and its ordered membership list.</summary>
     private async Task<TeamResponse?> BuildResponse(Guid teamId, CancellationToken cancellationToken) =>
         await dbContext.Teams
             .AsNoTracking()

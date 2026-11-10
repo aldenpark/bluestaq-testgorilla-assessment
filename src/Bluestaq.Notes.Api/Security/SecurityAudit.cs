@@ -4,6 +4,7 @@ using Bluestaq.Notes.Api.Data;
 
 namespace Bluestaq.Notes.Api.Security;
 
+/// <summary>Defines stable action names written to the security audit trail.</summary>
 public static class SecurityAuditActions
 {
     public const string TeamCreated = "team.created";
@@ -18,6 +19,7 @@ public static class SecurityAuditActions
     public const string NotePermissionRemoved = "note.permission-removed";
 }
 
+/// <summary>Defines stable target categories written to the security audit trail.</summary>
 public static class SecurityAuditTargets
 {
     public const string Team = "team";
@@ -27,8 +29,13 @@ public static class SecurityAuditTargets
     public const string NotePermission = "note-permission";
 }
 
-public sealed class SecurityAudit(NotesDbContext dbContext, IHttpContextAccessor httpContextAccessor)
+/// <summary>Creates sanitized audit events for security-sensitive changes in the current request.</summary>
+public sealed class SecurityAudit(
+    NotesDbContext dbContext,
+    IHttpContextAccessor httpContextAccessor,
+    TimeProvider timeProvider)
 {
+    /// <summary>Adds a security event to the current database transaction with actor and trace metadata.</summary>
     public void Record(
         string action,
         string targetType,
@@ -42,7 +49,7 @@ public sealed class SecurityAudit(NotesDbContext dbContext, IHttpContextAccessor
         dbContext.SecurityAuditEvents.Add(new SecurityAuditEvent
         {
             Id = Guid.NewGuid(),
-            OccurredAt = DateTime.UtcNow,
+            OccurredAt = timeProvider.GetUtcNow().UtcDateTime,
             ActorUserId = httpContext.User.GetUserId(),
             ActorCredentialId = httpContext.User.GetCredentialId(),
             Action = action,

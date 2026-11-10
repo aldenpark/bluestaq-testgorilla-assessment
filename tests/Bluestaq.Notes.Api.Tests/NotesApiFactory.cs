@@ -1,4 +1,5 @@
 using Bluestaq.Notes.Api.Data;
+using Bluestaq.Notes.Api.Security;
 using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Mvc.Testing;
 using Microsoft.EntityFrameworkCore;
@@ -18,8 +19,9 @@ public sealed class NotesApiFactory : WebApplicationFactory<Program>, IAsyncLife
         builder.ConfigureServices(services =>
         {
             services.RemoveAll<DbContextOptions<NotesDbContext>>();
-            services.AddDbContext<NotesDbContext>(options =>
-                options.UseSqlite($"Data Source={DatabasePath}"));
+            services.AddDbContext<NotesDbContext>((provider, options) => options
+                .UseSqlite($"Data Source={DatabasePath}")
+                .AddInterceptors(provider.GetRequiredService<SecurityAuditTelemetryInterceptor>()));
         });
     }
 

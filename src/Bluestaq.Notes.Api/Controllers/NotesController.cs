@@ -10,11 +10,17 @@ using Microsoft.EntityFrameworkCore;
 
 namespace Bluestaq.Notes.Api.Controllers;
 
+/// <summary>Manages team notes, note discovery, and per-note permissions.</summary>
 [ApiController]
 [Authorize]
+[ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status401Unauthorized)]
 [Route("api")]
-public sealed class NotesController(NotesDbContext dbContext, SecurityAudit securityAudit) : ControllerBase
+public sealed class NotesController(
+    NotesDbContext dbContext,
+    SecurityAudit securityAudit,
+    TimeProvider timeProvider) : ControllerBase
 {
+    /// <summary>Creates a note in a team where the authenticated user is a current member.</summary>
     [HttpPost("teams/{teamId:guid}/notes")]
     public async Task<ActionResult<NoteResponse>> Create(
         Guid teamId,
@@ -34,13 +40,15 @@ public sealed class NotesController(NotesDbContext dbContext, SecurityAudit secu
         }
 
         var userId = User.GetUserId();
-        var now = DateTime.UtcNow;
+        var now = timeProvider.GetUtcNow().UtcDateTime;
         var note = new Note
         {
             Id = Guid.NewGuid(),
             TeamId = teamId,
             Title = request.Title.Trim(),
             Content = request.Content,
+            Visibility = request.Visibility,
+            Version = 1,
             CreatedById = userId,
             UpdatedById = userId,
             CreatedAt = now,
@@ -49,9 +57,11 @@ public sealed class NotesController(NotesDbContext dbContext, SecurityAudit secu
         dbContext.Notes.Add(note);
         await dbContext.SaveChangesAsync(cancellationToken);
 
+        SetEtag(note.Version);
         return CreatedAtAction(nameof(Get), new { noteId = note.Id }, ToResponse(note));
     }
 
+    /// <summary>Returns a filtered, newest-first cursor page of notes for a team member.</summary>
     [HttpGet("teams/{teamId:guid}/notes")]
     public async Task<ActionResult<PagedNotesResponse>> List(
         Guid teamId,
@@ -99,7 +109,15 @@ public sealed class NotesController(NotesDbContext dbContext, SecurityAudit secu
                 """).AsNoTracking();
         }
 
-        query = query.Where(note => note.TeamId == teamId);
+        var userId = User.GetUserId();
+        var isOwner = await dbContext.Teams.AnyAsync(
+            team => team.Id == teamId && team.OwnerId == userId,
+            cancellationToken);
+        query = query.Where(note => note.TeamId == teamId
+            && (note.Visibility == NoteVisibility.Team
+                || note.CreatedById == userId
+                || isOwner
+                || note.Permissions.Any(permission => permission.UserId == userId)));
         if (createdById is not null)
         {
             query = query.Where(note => note.CreatedById == createdById);
@@ -129,6 +147,7 @@ public sealed class NotesController(NotesDbContext dbContext, SecurityAudit secu
         return Ok(new PagedNotesResponse(items, nextCursor));
     }
 
+    /// <summary>Returns a note when the authenticated user belongs to its team.</summary>
     [HttpGet("notes/{noteId:guid}")]
     public async Task<ActionResult<NoteResponse>> Get(Guid noteId, CancellationToken cancellationToken)
     {
@@ -143,10 +162,20 @@ public sealed class NotesController(NotesDbContext dbContext, SecurityAudit secu
             return Forbid();
         }
 
+        if (!await CanRead(note, User.GetUserId(), cancellationToken))
+        {
+            return Problem("The note does not exist.", statusCode: StatusCodes.Status404NotFound);
+        }
+
+        SetEtag(note.Version);
         return Ok(ToResponse(note));
     }
 
+    /// <summary>Replaces a note's content when the caller is its creator, team owner, or an editor.</summary>
     [HttpPut("notes/{noteId:guid}")]
+    [ProducesResponseType(typeof(NoteResponse), StatusCodes.Status200OK)]
+    [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status412PreconditionFailed)]
+    [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status428PreconditionRequired)]
     public async Task<ActionResult<NoteResponse>> Update(
         Guid noteId,
         UpdateNoteRequest request,
@@ -156,6 +185,18 @@ public sealed class NotesController(NotesDbContext dbContext, SecurityAudit secu
         {
             ModelState.AddModelError(nameof(request.Title), "Title must contain non-whitespace characters.");
             return ValidationProblem(ModelState);
+        }
+
+        if (!Request.Headers.TryGetValue("If-Match", out var ifMatch))
+        {
+            return Problem(
+                "If-Match is required for note updates.",
+                statusCode: StatusCodes.Status428PreconditionRequired);
+        }
+
+        if (!TryParseEtag(ifMatch.ToString(), out var expectedVersion))
+        {
+            return Problem("If-Match must contain a quoted note version.", statusCode: StatusCodes.Status400BadRequest);
         }
 
         var note = await dbContext.Notes.SingleOrDefaultAsync(note => note.Id == noteId, cancellationToken);
@@ -170,14 +211,31 @@ public sealed class NotesController(NotesDbContext dbContext, SecurityAudit secu
             return Forbid();
         }
 
+
+        if (note.Version != expectedVersion)
+        {
+            return Problem("The note changed after it was read.", statusCode: StatusCodes.Status412PreconditionFailed);
+        }
+
         note.Title = request.Title.Trim();
         note.Content = request.Content;
         note.UpdatedById = userId;
-        note.UpdatedAt = DateTime.UtcNow;
-        await dbContext.SaveChangesAsync(cancellationToken);
+        note.UpdatedAt = timeProvider.GetUtcNow().UtcDateTime;
+        note.Version++;
+        try
+        {
+            await dbContext.SaveChangesAsync(cancellationToken);
+        }
+        catch (DbUpdateConcurrencyException)
+        {
+            return Problem("The note changed after it was read.", statusCode: StatusCodes.Status412PreconditionFailed);
+        }
+
+        SetEtag(note.Version);
         return Ok(ToResponse(note));
     }
 
+    /// <summary>Deletes a note when the caller is its creator or team owner.</summary>
     [HttpDelete("notes/{noteId:guid}")]
     public async Task<IActionResult> Delete(Guid noteId, CancellationToken cancellationToken)
     {
@@ -197,6 +255,7 @@ public sealed class NotesController(NotesDbContext dbContext, SecurityAudit secu
         return NoContent();
     }
 
+    /// <summary>Lists explicit note permissions for the note creator or team owner.</summary>
     [HttpGet("notes/{noteId:guid}/permissions")]
     public async Task<ActionResult<IReadOnlyCollection<NotePermissionResponse>>> ListPermissions(
         Guid noteId,
@@ -227,6 +286,7 @@ public sealed class NotesController(NotesDbContext dbContext, SecurityAudit secu
         return Ok(permissions);
     }
 
+    /// <summary>Creates or replaces a team member's explicit permission on a note.</summary>
     [HttpPut("notes/{noteId:guid}/permissions/{userId:guid}")]
     public async Task<ActionResult<NotePermissionResponse>> SetPermission(
         Guid noteId,
@@ -289,6 +349,7 @@ public sealed class NotesController(NotesDbContext dbContext, SecurityAudit secu
         return Ok(new NotePermissionResponse(member.UserId, member.DisplayName, permission.Role));
     }
 
+    /// <summary>Removes a team member's explicit permission from a note.</summary>
     [HttpDelete("notes/{noteId:guid}/permissions/{userId:guid}")]
     public async Task<IActionResult> DeletePermission(
         Guid noteId,
@@ -324,6 +385,7 @@ public sealed class NotesController(NotesDbContext dbContext, SecurityAudit secu
         return NoContent();
     }
 
+    /// <summary>Returns an HTTP error when a team is missing or the caller is not a member.</summary>
     private async Task<ActionResult?> CheckTeamAccess(Guid teamId, CancellationToken cancellationToken)
     {
         if (!await dbContext.Teams.AnyAsync(team => team.Id == teamId, cancellationToken))
@@ -334,11 +396,13 @@ public sealed class NotesController(NotesDbContext dbContext, SecurityAudit secu
         return await IsMember(teamId, cancellationToken) ? null : Forbid();
     }
 
+    /// <summary>Determines whether the authenticated user currently belongs to a team.</summary>
     private Task<bool> IsMember(Guid teamId, CancellationToken cancellationToken) =>
         dbContext.TeamMemberships.AnyAsync(
             membership => membership.TeamId == teamId && membership.UserId == User.GetUserId(),
             cancellationToken);
 
+    /// <summary>Determines whether a user may update a note under membership, ownership, and editor rules.</summary>
     private async Task<bool> CanEdit(Note note, Guid userId, CancellationToken cancellationToken)
     {
         if (!await IsMember(note.TeamId, cancellationToken))
@@ -346,17 +410,11 @@ public sealed class NotesController(NotesDbContext dbContext, SecurityAudit secu
             return false;
         }
 
-        return note.CreatedById == userId
-            || await dbContext.Teams.AnyAsync(
-                team => team.Id == note.TeamId && team.OwnerId == userId,
-                cancellationToken)
-            || await dbContext.NotePermissions.AnyAsync(
-                permission => permission.NoteId == note.Id
-                    && permission.UserId == userId
-                    && permission.Role == NotePermissionRole.Editor,
-                cancellationToken);
+        var access = await GetAccessContext(note, userId, cancellationToken);
+        return NoteAccessPolicy.CanEdit(note.CreatedById, access.OwnerId, userId, access.Role);
     }
 
+    /// <summary>Determines whether a user may delete a note or manage its permissions.</summary>
     private async Task<bool> CanAdminister(Note note, Guid userId, CancellationToken cancellationToken)
     {
         if (!await IsMember(note.TeamId, cancellationToken))
@@ -364,15 +422,42 @@ public sealed class NotesController(NotesDbContext dbContext, SecurityAudit secu
             return false;
         }
 
-        return note.CreatedById == userId
-            || await dbContext.Teams.AnyAsync(
-                team => team.Id == note.TeamId && team.OwnerId == userId,
-                cancellationToken);
+        var ownerId = await dbContext.Teams
+            .Where(team => team.Id == note.TeamId)
+            .Select(team => team.OwnerId)
+            .SingleAsync(cancellationToken);
+        return NoteAccessPolicy.CanAdminister(note.CreatedById, ownerId, userId);
     }
 
+    /// <summary>Determines whether a team member may retrieve a note under its visibility rules.</summary>
+    private async Task<bool> CanRead(Note note, Guid userId, CancellationToken cancellationToken)
+    {
+        var access = await GetAccessContext(note, userId, cancellationToken);
+        return NoteAccessPolicy.CanRead(note.Visibility, note.CreatedById, access.OwnerId, userId, access.Role);
+    }
+
+    /// <summary>Loads team ownership and any explicit note role used by access policies.</summary>
+    private async Task<(Guid OwnerId, NotePermissionRole? Role)> GetAccessContext(
+        Note note,
+        Guid userId,
+        CancellationToken cancellationToken)
+    {
+        var ownerId = await dbContext.Teams
+            .Where(team => team.Id == note.TeamId)
+            .Select(team => team.OwnerId)
+            .SingleAsync(cancellationToken);
+        var role = await dbContext.NotePermissions
+            .Where(permission => permission.NoteId == note.Id && permission.UserId == userId)
+            .Select(permission => (NotePermissionRole?)permission.Role)
+            .SingleOrDefaultAsync(cancellationToken);
+        return (ownerId, role);
+    }
+
+    /// <summary>Encodes a note's stable pagination position as an opaque URL-safe cursor.</summary>
     private static string EncodeCursor(Note note) =>
         WebEncoders.Base64UrlEncode(JsonSerializer.SerializeToUtf8Bytes(new NoteCursor(note.UpdatedAt, note.Id)));
 
+    /// <summary>Attempts to decode and validate an opaque note pagination cursor.</summary>
     private static bool TryDecodeCursor(string cursor, out NoteCursor? decoded)
     {
         try
@@ -392,16 +477,34 @@ public sealed class NotesController(NotesDbContext dbContext, SecurityAudit secu
         }
     }
 
+    /// <summary>Maps a persisted note entity to its API response contract.</summary>
     private static NoteResponse ToResponse(Note note) =>
         new(
             note.Id,
             note.TeamId,
             note.Title,
             note.Content,
+            note.Visibility,
+            note.Version,
             note.CreatedById,
             note.UpdatedById,
             note.CreatedAt,
             note.UpdatedAt);
 
+    /// <summary>Writes a strong entity tag containing the current note version.</summary>
+    private void SetEtag(int version) => Response.Headers.ETag = $"\"{version}\"";
+
+    /// <summary>Parses the strong entity tag accepted by note replacement requests.</summary>
+    private static bool TryParseEtag(string value, out int version)
+    {
+        version = 0;
+        return value.Length >= 3
+            && value[0] == '"'
+            && value[^1] == '"'
+            && int.TryParse(value[1..^1], out version)
+            && version > 0;
+    }
+
+    /// <summary>Captures the timestamp and identifier used for stable note pagination.</summary>
     private sealed record NoteCursor(DateTime UpdatedAt, Guid Id);
 }

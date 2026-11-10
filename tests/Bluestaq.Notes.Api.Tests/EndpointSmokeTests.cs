@@ -74,9 +74,14 @@ public sealed class EndpointSmokeTests(NotesApiFactory factory) : IClassFixture<
         var listPermissions = await alice.GetAsync($"/api/notes/{note.Id}/permissions");
         Assert.Equal(HttpStatusCode.OK, listPermissions.StatusCode);
 
-        var updateNote = await bob.PutAsJsonAsync(
-            $"/api/notes/{note.Id}",
-            new UpdateNoteRequest { Title = "Updated smoke note", Content = "Updated by Bob." });
+        using var currentNote = await bob.GetAsync($"/api/notes/{note.Id}");
+        var updateRequest = new HttpRequestMessage(HttpMethod.Put, $"/api/notes/{note.Id}")
+        {
+            Content = JsonContent.Create(
+                new UpdateNoteRequest { Title = "Updated smoke note", Content = "Updated by Bob." }),
+        };
+        updateRequest.Headers.TryAddWithoutValidation("If-Match", currentNote.Headers.ETag?.Tag);
+        var updateNote = await bob.SendAsync(updateRequest);
         Assert.Equal(HttpStatusCode.OK, updateNote.StatusCode);
         Assert.Equal("Updated smoke note", (await updateNote.Content.ReadFromJsonAsync<NoteResponse>())?.Title);
 

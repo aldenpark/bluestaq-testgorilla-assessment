@@ -2,6 +2,7 @@ using Microsoft.EntityFrameworkCore;
 
 namespace Bluestaq.Notes.Api.Data;
 
+/// <summary>Coordinates SQLite persistence, entity relationships, and audit-event immutability.</summary>
 public sealed class NotesDbContext(DbContextOptions<NotesDbContext> options) : DbContext(options)
 {
     public DbSet<User> Users => Set<User>();
@@ -12,12 +13,14 @@ public sealed class NotesDbContext(DbContextOptions<NotesDbContext> options) : D
     public DbSet<NotePermission> NotePermissions => Set<NotePermission>();
     public DbSet<SecurityAuditEvent> SecurityAuditEvents => Set<SecurityAuditEvent>();
 
+    /// <summary>Saves tracked changes after rejecting any audit-event updates or deletions.</summary>
     public override int SaveChanges(bool acceptAllChangesOnSuccess)
     {
         EnsureAuditEventsAreAppendOnly();
         return base.SaveChanges(acceptAllChangesOnSuccess);
     }
 
+    /// <summary>Asynchronously saves tracked changes after rejecting audit-event updates or deletions.</summary>
     public override Task<int> SaveChangesAsync(
         bool acceptAllChangesOnSuccess,
         CancellationToken cancellationToken = default)
@@ -26,11 +29,13 @@ public sealed class NotesDbContext(DbContextOptions<NotesDbContext> options) : D
         return base.SaveChangesAsync(acceptAllChangesOnSuccess, cancellationToken);
     }
 
+    /// <summary>Configures relational constraints, indexes, conversions, and entity relationships.</summary>
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
         modelBuilder.Entity<User>(entity =>
         {
             entity.Property(user => user.DisplayName).HasMaxLength(100);
+            entity.Property(user => user.CredentialVersion).IsConcurrencyToken();
         });
 
         modelBuilder.Entity<ApiKeyCredential>(entity =>
@@ -80,6 +85,8 @@ public sealed class NotesDbContext(DbContextOptions<NotesDbContext> options) : D
         {
             entity.Property(note => note.Title).HasMaxLength(200);
             entity.Property(note => note.Content).HasMaxLength(10_000);
+            entity.Property(note => note.Visibility).HasConversion<string>().HasMaxLength(20);
+            entity.Property(note => note.Version).IsConcurrencyToken();
             entity.Property(note => note.CreatedAt)
                 .HasConversion(value => value, value => DateTime.SpecifyKind(value, DateTimeKind.Utc));
             entity.Property(note => note.UpdatedAt)
@@ -128,6 +135,7 @@ public sealed class NotesDbContext(DbContextOptions<NotesDbContext> options) : D
         });
     }
 
+    /// <summary>Throws when a tracked security audit event would be updated or deleted.</summary>
     private void EnsureAuditEventsAreAppendOnly()
     {
         if (ChangeTracker.Entries<SecurityAuditEvent>()
@@ -137,9 +145,11 @@ public sealed class NotesDbContext(DbContextOptions<NotesDbContext> options) : D
         }
     }
 
+    /// <summary>Configures a required timestamp to be materialized with UTC kind information.</summary>
     private static void ConfigureUtc(Microsoft.EntityFrameworkCore.Metadata.Builders.PropertyBuilder<DateTime> property) =>
         property.HasConversion(value => value, value => DateTime.SpecifyKind(value, DateTimeKind.Utc));
 
+    /// <summary>Configures an optional timestamp to be materialized with UTC kind information.</summary>
     private static void ConfigureNullableUtc(
         Microsoft.EntityFrameworkCore.Metadata.Builders.PropertyBuilder<DateTime?> property) =>
         property.HasConversion(

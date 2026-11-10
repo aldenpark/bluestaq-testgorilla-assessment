@@ -42,8 +42,10 @@ public sealed class NotesApiTests(NotesApiFactory factory) : IClassFixture<Notes
         Assert.Equal(HttpStatusCode.OK, getResponse.StatusCode);
         Assert.Equal("Decision", (await getResponse.Content.ReadFromJsonAsync<NoteResponse>())?.Title);
 
-        var updateResponse = await client.PutAsJsonAsync(
-            $"/api/notes/{created.Id}",
+        var updateResponse = await PutNote(
+            client,
+            created.Id,
+            getResponse.Headers.ETag?.Tag,
             new UpdateNoteRequest { Title = "Updated decision", Content = "Use SQLite locally." });
         Assert.Equal(HttpStatusCode.OK, updateResponse.StatusCode);
         var updated = await updateResponse.Content.ReadFromJsonAsync<NoteResponse>();
@@ -200,5 +202,19 @@ public sealed class NotesApiTests(NotesApiFactory factory) : IClassFixture<Notes
             new CreateTeamRequest { Name = $"Team {Guid.NewGuid():N}" });
         Assert.Equal(HttpStatusCode.Created, response.StatusCode);
         return (await response.Content.ReadFromJsonAsync<TeamResponse>())!;
+    }
+
+    private static Task<HttpResponseMessage> PutNote(
+        HttpClient client,
+        Guid noteId,
+        string? etag,
+        UpdateNoteRequest request)
+    {
+        var message = new HttpRequestMessage(HttpMethod.Put, $"/api/notes/{noteId}")
+        {
+            Content = JsonContent.Create(request),
+        };
+        message.Headers.TryAddWithoutValidation("If-Match", etag);
+        return client.SendAsync(message);
     }
 }

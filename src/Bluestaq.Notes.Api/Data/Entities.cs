@@ -1,13 +1,18 @@
+using System.Text.Json.Serialization;
+
 namespace Bluestaq.Notes.Api.Data;
 
+/// <summary>Represents a person who can authenticate and collaborate in teams.</summary>
 public sealed class User
 {
     public Guid Id { get; set; }
     public required string DisplayName { get; set; }
+    public int CredentialVersion { get; set; } = 1;
     public ICollection<TeamMembership> Memberships { get; set; } = [];
     public ICollection<ApiKeyCredential> ApiKeys { get; set; } = [];
 }
 
+/// <summary>Represents a named, hashed API-key credential owned by a user.</summary>
 public sealed class ApiKeyCredential
 {
     public Guid Id { get; set; }
@@ -21,6 +26,7 @@ public sealed class ApiKeyCredential
     public DateTime? LastUsedAt { get; set; }
 }
 
+/// <summary>Represents a collaborative workspace owned by one user.</summary>
 public sealed class Team
 {
     public Guid Id { get; set; }
@@ -32,6 +38,7 @@ public sealed class Team
     public ICollection<Note> Notes { get; set; } = [];
 }
 
+/// <summary>Associates a user with a team and records when they joined.</summary>
 public sealed class TeamMembership
 {
     public Guid TeamId { get; set; }
@@ -41,6 +48,7 @@ public sealed class TeamMembership
     public DateTime JoinedAt { get; set; }
 }
 
+/// <summary>Represents a team-owned note and its authorship metadata.</summary>
 public sealed class Note
 {
     public Guid Id { get; set; }
@@ -48,6 +56,8 @@ public sealed class Note
     public Team Team { get; set; } = null!;
     public required string Title { get; set; }
     public required string Content { get; set; }
+    public NoteVisibility Visibility { get; set; } = NoteVisibility.Team;
+    public int Version { get; set; } = 1;
     public Guid CreatedById { get; set; }
     public User CreatedBy { get; set; } = null!;
     public Guid UpdatedById { get; set; }
@@ -57,12 +67,23 @@ public sealed class Note
     public ICollection<NotePermission> Permissions { get; set; } = [];
 }
 
+/// <summary>Defines whether a note is visible to all team members or only explicitly authorized members.</summary>
+[JsonConverter(typeof(JsonStringEnumConverter<NoteVisibility>))]
+public enum NoteVisibility
+{
+    Team,
+    Restricted,
+}
+
+/// <summary>Defines the explicit access levels that may be granted on a note.</summary>
+[JsonConverter(typeof(JsonStringEnumConverter<NotePermissionRole>))]
 public enum NotePermissionRole
 {
     Reader,
     Editor,
 }
 
+/// <summary>Associates a team member with an explicit role on a note.</summary>
 public sealed class NotePermission
 {
     public Guid NoteId { get; set; }
@@ -72,6 +93,7 @@ public sealed class NotePermission
     public NotePermissionRole Role { get; set; }
 }
 
+/// <summary>Represents an immutable record of a security-relevant change.</summary>
 public sealed class SecurityAuditEvent
 {
     public Guid Id { get; set; }

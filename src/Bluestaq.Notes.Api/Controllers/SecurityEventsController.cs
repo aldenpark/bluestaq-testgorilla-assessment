@@ -10,11 +10,14 @@ using Microsoft.EntityFrameworkCore;
 
 namespace Bluestaq.Notes.Api.Controllers;
 
+/// <summary>Exposes caller-scoped and owner-scoped views of the immutable security audit trail.</summary>
 [ApiController]
 [Authorize]
+[ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status401Unauthorized)]
 [Route("api")]
 public sealed class SecurityEventsController(NotesDbContext dbContext) : ControllerBase
 {
+    /// <summary>Lists security events performed by or directly affecting the authenticated user.</summary>
     [HttpGet("security-events")]
     public Task<ActionResult<PagedSecurityAuditEventsResponse>> ListPersonal(
         [FromQuery] string? cursor = null,
@@ -31,6 +34,7 @@ public sealed class SecurityEventsController(NotesDbContext dbContext) : Control
         return Page(query, cursor, pageSize, cancellationToken);
     }
 
+    /// <summary>Lists a team's security events when the authenticated user owns that team.</summary>
     [HttpGet("teams/{teamId:guid}/security-events")]
     public async Task<ActionResult<PagedSecurityAuditEventsResponse>> ListTeam(
         Guid teamId,
@@ -59,6 +63,7 @@ public sealed class SecurityEventsController(NotesDbContext dbContext) : Control
             cancellationToken);
     }
 
+    /// <summary>Validates pagination inputs and materializes a newest-first page of audit events.</summary>
     private async Task<ActionResult<PagedSecurityAuditEventsResponse>> Page(
         IQueryable<SecurityAuditEvent> query,
         string? cursor,
@@ -97,6 +102,7 @@ public sealed class SecurityEventsController(NotesDbContext dbContext) : Control
         return Ok(new PagedSecurityAuditEventsResponse(items, nextCursor));
     }
 
+    /// <summary>Maps a persisted audit event to its API response contract.</summary>
     private static SecurityAuditEventResponse ToResponse(SecurityAuditEvent auditEvent) =>
         new(
             auditEvent.Id,
@@ -110,16 +116,19 @@ public sealed class SecurityEventsController(NotesDbContext dbContext) : Control
             auditEvent.TraceId,
             ParseDetails(auditEvent.Details));
 
+    /// <summary>Parses stored JSON details into a response-safe detached JSON value.</summary>
     private static JsonElement ParseDetails(string details)
     {
         using var document = JsonDocument.Parse(details);
         return document.RootElement.Clone();
     }
 
+    /// <summary>Encodes an audit event's stable pagination position as an opaque URL-safe cursor.</summary>
     private static string EncodeCursor(SecurityAuditEvent auditEvent) =>
         WebEncoders.Base64UrlEncode(
             JsonSerializer.SerializeToUtf8Bytes(new AuditCursor(auditEvent.OccurredAt, auditEvent.Id)));
 
+    /// <summary>Attempts to decode and validate an opaque audit-event pagination cursor.</summary>
     private static bool TryDecodeCursor(string cursor, out AuditCursor? decoded)
     {
         try
@@ -139,5 +148,6 @@ public sealed class SecurityEventsController(NotesDbContext dbContext) : Control
         }
     }
 
+    /// <summary>Captures the timestamp and identifier used for stable audit-event pagination.</summary>
     private sealed record AuditCursor(DateTime OccurredAt, Guid Id);
 }
