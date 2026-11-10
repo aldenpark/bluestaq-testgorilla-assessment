@@ -36,7 +36,15 @@ Send the key in the `X-Api-Key` header. The database stores only SHA-256 hashes,
 dotnet test Bluestaq.Notes.slnx
 ```
 
-The 10 integration-test cases exercise the HTTP pipeline, authentication, note CRUD and listing, validation and content limits, missing resources, cross-team authorization, owner-only membership changes, pagination limits, and persistence through a fresh EF Core context. Tests use an isolated temporary SQLite database and require no external services.
+Run the full-route smoke workflow by itself:
+
+```bash
+dotnet test Bluestaq.Notes.slnx --filter "Category=Smoke"
+```
+
+The smoke test calls every endpoint through the real ASP.NET Core pipeline: health, team create/list/get, membership add/remove, and note create/list/get/update/delete. It also proves that missing or invalid credentials receive `401` and that a non-member receives `403` before admission and after removal.
+
+The remaining integration tests cover validation and content limits, missing resources, authorization rules, pagination limits, and persistence through a fresh EF Core context. All 11 test cases use isolated temporary SQLite databases and require no external services.
 
 ## API
 
@@ -168,6 +176,37 @@ I considered an in-memory store, PostgreSQL, and SQLite. An in-memory store woul
 Timestamps are stored as UTC `DateTime` rather than `DateTimeOffset` because SQLite/EF cannot server-order `DateTimeOffset` values. This preserves indexed, deterministic pagination but assumes every writer follows the UTC convention. SQLite is also a single-node choice with limited write concurrency; PostgreSQL would be the natural next step if usage outgrows small teams.
 
 ## Security
+
+### Request security flow
+
+```mermaid
+sequenceDiagram
+    participant Client
+    participant Auth as API-key handler
+    participant DB as SQLite
+    participant Endpoint
+    Client->>Auth: X-Api-Key header
+    Auth->>Auth: Reject missing, duplicate, short, or oversized key
+    Auth->>Auth: SHA-256 hash supplied key
+    Auth->>DB: Find user by unique key hash
+    alt Missing or invalid key
+        Auth-->>Client: 401 Unauthorized
+    else Authenticated user
+        Auth->>Endpoint: ClaimsPrincipal with user ID
+        Endpoint->>DB: Check team membership or ownership
+        alt Authenticated but not allowed
+            Endpoint-->>Client: 403 Forbidden
+        else Authorized
+            Endpoint-->>Client: Resource response
+        end
+    end
+```
+
+Authentication answers **who is calling**; authorization answers **what that user may access**:
+
+- `401 Unauthorized`: no API key, malformed API key, or no user matches its hash.
+- `403 Forbidden`: the key is valid, but the authenticated user is not a team member or is not the owner for a membership change.
+- `404 Not Found`: the caller is authenticated and the requested resource does not exist.
 
 - Authentication is handled by ASP.NET Core; callers cannot select identity using a user-ID header or request field.
 - API keys are accepted only through `X-Api-Key`, length-bounded, hashed, and matched against a unique indexed hash.
