@@ -54,8 +54,8 @@ public sealed class NotesApiTests(NotesApiFactory factory) : IClassFixture<Notes
         var listJson = await listResponse.Content.ReadAsStringAsync();
         var list = JsonSerializer.Deserialize<PagedNotesResponse>(listJson, JsonSerializerOptions.Web);
         Assert.NotNull(list);
-        Assert.Equal(1, list.TotalCount);
         Assert.Equal(created.Id, Assert.Single(list.Items).Id);
+        Assert.Null(list.NextCursor);
         using (var document = JsonDocument.Parse(listJson))
         {
             var persistedTimestamp = document.RootElement.GetProperty("items")[0].GetProperty("createdAt").GetString();
@@ -173,17 +173,17 @@ public sealed class NotesApiTests(NotesApiFactory factory) : IClassFixture<Notes
     }
 
     [Fact]
-    public async Task PaginationOutsideLimits_ReturnsBadRequest()
+    public async Task PaginationOutsideLimitsAndInvalidCursor_ReturnBadRequest()
     {
         using var client = CreateClient("dev-alice-api-key");
         var team = await CreateTeam(client);
 
-        var response = await client.GetAsync($"/api/teams/{team.Id}/notes?page=0&pageSize=101");
+        var response = await client.GetAsync($"/api/teams/{team.Id}/notes?pageSize=101");
 
         Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
         Assert.Equal(
             HttpStatusCode.BadRequest,
-            (await client.GetAsync($"/api/teams/{team.Id}/notes?page={int.MaxValue}&pageSize=100")).StatusCode);
+            (await client.GetAsync($"/api/teams/{team.Id}/notes?cursor=not-a-cursor")).StatusCode);
     }
 
     private HttpClient CreateClient(string apiKey)

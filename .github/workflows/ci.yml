@@ -1,0 +1,101 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  DOTNET_NOLOGO: true
+  DOTNET_CLI_TELEMETRY_OPTOUT: true
+  LINE_COVERAGE_MINIMUM: "0.90"
+  BRANCH_COVERAGE_MINIMUM: "0.70"
+
+jobs:
+  verify:
+    name: CVE, tests, and coverage
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Install .NET SDK
+        uses: actions/setup-dotnet@v4
+        with:
+          global-json-file: global.json
+
+      - name: Restore dependencies
+        run: dotnet restore Bluestaq.Notes.slnx
+
+      - name: Scan NuGet dependencies for CVEs
+        shell: bash
+        run: |
+          mkdir -p TestResults
+          dotnet list Bluestaq.Notes.slnx package \
+            --vulnerable \
+            --include-transitive \
+            --format json > TestResults/cve-scan.json
+          jq . TestResults/cve-scan.json
+          vulnerability_count=$(jq '[.. | objects | .vulnerabilities? // empty | .[]] | length' TestResults/cve-scan.json)
+          if (( vulnerability_count > 0 )); then
+            echo "Found ${vulnerability_count} vulnerable package advisories."
+            exit 1
+          fi
+          echo "No vulnerable direct or transitive NuGet packages found."
+
+      - name: Run all tests with coverage
+        run: >-
+          dotnet test Bluestaq.Notes.slnx
+          --no-restore
+          --configuration Release
+          --collect:"XPlat Code Coverage"
+          --results-directory TestResults
+          --logger "trx;LogFileName=tests.trx"
+
+      - name: Enforce coverage minimums
+        shell: bash
+        run: |
+          coverage_file=$(find TestResults -name coverage.cobertura.xml -print -quit)
+          if [[ -z "${coverage_file}" ]]; then
+            echo "Coverage report was not produced."
+            exit 1
+          fi
+
+          read -r line_rate branch_rate < <(
+            sed -nE 's/.*line-rate="([0-9.]+)" branch-rate="([0-9.]+)".*/\1 \2/p' "${coverage_file}" | head -1
+          )
+          if [[ -z "${line_rate}" || -z "${branch_rate}" ]]; then
+            echo "Coverage rates could not be read from ${coverage_file}."
+            exit 1
+          fi
+
+          awk \
+            -v line_rate="${line_rate}" \
+            -v branch_rate="${branch_rate}" \
+            -v line_min="${LINE_COVERAGE_MINIMUM}" \
+            -v branch_min="${BRANCH_COVERAGE_MINIMUM}" \
+            'BEGIN {
+              printf "Line coverage: %.2f%% (minimum %.2f%%)\n", line_rate * 100, line_min * 100
+              printf "Branch coverage: %.2f%% (minimum %.2f%%)\n", branch_rate * 100, branch_min * 100
+              if (line_rate < line_min || branch_rate < branch_min) exit 1
+            }'
+
+      - name: Upload verification artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: verification-results
+          path: TestResults
+          if-no-files-found: warn
+          retention-days: 14

@@ -5,17 +5,48 @@ namespace Bluestaq.Notes.Api.Data;
 public sealed class NotesDbContext(DbContextOptions<NotesDbContext> options) : DbContext(options)
 {
     public DbSet<User> Users => Set<User>();
+    public DbSet<ApiKeyCredential> ApiKeys => Set<ApiKeyCredential>();
     public DbSet<Team> Teams => Set<Team>();
     public DbSet<TeamMembership> TeamMemberships => Set<TeamMembership>();
     public DbSet<Note> Notes => Set<Note>();
+    public DbSet<NotePermission> NotePermissions => Set<NotePermission>();
+    public DbSet<SecurityAuditEvent> SecurityAuditEvents => Set<SecurityAuditEvent>();
+
+    public override int SaveChanges(bool acceptAllChangesOnSuccess)
+    {
+        EnsureAuditEventsAreAppendOnly();
+        return base.SaveChanges(acceptAllChangesOnSuccess);
+    }
+
+    public override Task<int> SaveChangesAsync(
+        bool acceptAllChangesOnSuccess,
+        CancellationToken cancellationToken = default)
+    {
+        EnsureAuditEventsAreAppendOnly();
+        return base.SaveChangesAsync(acceptAllChangesOnSuccess, cancellationToken);
+    }
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
         modelBuilder.Entity<User>(entity =>
         {
             entity.Property(user => user.DisplayName).HasMaxLength(100);
-            entity.Property(user => user.ApiKeyHash).HasMaxLength(64).IsFixedLength();
-            entity.HasIndex(user => user.ApiKeyHash).IsUnique();
+        });
+
+        modelBuilder.Entity<ApiKeyCredential>(entity =>
+        {
+            entity.Property(key => key.KeyHash).HasMaxLength(64).IsFixedLength();
+            entity.Property(key => key.Name).HasMaxLength(100);
+            entity.HasIndex(key => key.KeyHash).IsUnique();
+            entity.HasIndex(key => key.UserId);
+            entity.HasOne(key => key.User)
+                .WithMany(user => user.ApiKeys)
+                .HasForeignKey(key => key.UserId)
+                .OnDelete(DeleteBehavior.Cascade);
+            ConfigureUtc(entity.Property(key => key.CreatedAt));
+            ConfigureNullableUtc(entity.Property(key => key.ExpiresAt));
+            ConfigureNullableUtc(entity.Property(key => key.RevokedAt));
+            ConfigureNullableUtc(entity.Property(key => key.LastUsedAt));
         });
 
         modelBuilder.Entity<Team>(entity =>
@@ -67,5 +98,51 @@ public sealed class NotesDbContext(DbContextOptions<NotesDbContext> options) : D
                 .HasForeignKey(note => note.UpdatedById)
                 .OnDelete(DeleteBehavior.Restrict);
         });
+
+        modelBuilder.Entity<NotePermission>(entity =>
+        {
+            entity.HasKey(permission => new { permission.NoteId, permission.UserId });
+            entity.Property(permission => permission.Role).HasConversion<string>().HasMaxLength(10);
+            entity.HasOne(permission => permission.Note)
+                .WithMany(note => note.Permissions)
+                .HasForeignKey(permission => permission.NoteId)
+                .OnDelete(DeleteBehavior.Cascade);
+            entity.HasOne(permission => permission.User)
+                .WithMany()
+                .HasForeignKey(permission => permission.UserId)
+                .OnDelete(DeleteBehavior.Restrict);
+            entity.HasIndex(permission => permission.UserId);
+        });
+
+        modelBuilder.Entity<SecurityAuditEvent>(entity =>
+        {
+            ConfigureUtc(entity.Property(auditEvent => auditEvent.OccurredAt));
+            entity.Property(auditEvent => auditEvent.Action).HasMaxLength(100);
+            entity.Property(auditEvent => auditEvent.TargetType).HasMaxLength(50);
+            entity.Property(auditEvent => auditEvent.TraceId).HasMaxLength(100);
+            entity.Property(auditEvent => auditEvent.Details).HasMaxLength(4_000);
+            entity.HasIndex(auditEvent => new { auditEvent.OccurredAt, auditEvent.Id });
+            entity.HasIndex(auditEvent => new { auditEvent.ActorUserId, auditEvent.OccurredAt });
+            entity.HasIndex(auditEvent => new { auditEvent.TeamId, auditEvent.OccurredAt });
+            entity.HasIndex(auditEvent => auditEvent.TargetId);
+        });
     }
+
+    private void EnsureAuditEventsAreAppendOnly()
+    {
+        if (ChangeTracker.Entries<SecurityAuditEvent>()
+            .Any(entry => entry.State is EntityState.Modified or EntityState.Deleted))
+        {
+            throw new InvalidOperationException("Security audit events are append-only.");
+        }
+    }
+
+    private static void ConfigureUtc(Microsoft.EntityFrameworkCore.Metadata.Builders.PropertyBuilder<DateTime> property) =>
+        property.HasConversion(value => value, value => DateTime.SpecifyKind(value, DateTimeKind.Utc));
+
+    private static void ConfigureNullableUtc(
+        Microsoft.EntityFrameworkCore.Metadata.Builders.PropertyBuilder<DateTime?> property) =>
+        property.HasConversion(
+            value => value,
+            value => value.HasValue ? DateTime.SpecifyKind(value.Value, DateTimeKind.Utc) : null);
 }

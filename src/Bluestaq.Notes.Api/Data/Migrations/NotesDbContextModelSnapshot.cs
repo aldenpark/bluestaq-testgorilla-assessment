@@ -17,6 +17,48 @@ namespace Bluestaq.Notes.Api.Data.Migrations
 #pragma warning disable 612, 618
             modelBuilder.HasAnnotation("ProductVersion", "10.0.4");
 
+            modelBuilder.Entity("Bluestaq.Notes.Api.Data.ApiKeyCredential", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("TEXT");
+
+                    b.Property<DateTime>("CreatedAt")
+                        .HasColumnType("TEXT");
+
+                    b.Property<DateTime?>("ExpiresAt")
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("KeyHash")
+                        .IsRequired()
+                        .HasMaxLength(64)
+                        .HasColumnType("TEXT")
+                        .IsFixedLength();
+
+                    b.Property<DateTime?>("LastUsedAt")
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("Name")
+                        .IsRequired()
+                        .HasMaxLength(100)
+                        .HasColumnType("TEXT");
+
+                    b.Property<DateTime?>("RevokedAt")
+                        .HasColumnType("TEXT");
+
+                    b.Property<Guid>("UserId")
+                        .HasColumnType("TEXT");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("KeyHash")
+                        .IsUnique();
+
+                    b.HasIndex("UserId");
+
+                    b.ToTable("ApiKeys");
+                });
+
             modelBuilder.Entity("Bluestaq.Notes.Api.Data.Note", b =>
                 {
                     b.Property<Guid>("Id")
@@ -57,6 +99,80 @@ namespace Bluestaq.Notes.Api.Data.Migrations
                     b.HasIndex("TeamId", "UpdatedAt");
 
                     b.ToTable("Notes");
+                });
+
+            modelBuilder.Entity("Bluestaq.Notes.Api.Data.NotePermission", b =>
+                {
+                    b.Property<Guid>("NoteId")
+                        .HasColumnType("TEXT");
+
+                    b.Property<Guid>("UserId")
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("Role")
+                        .IsRequired()
+                        .HasMaxLength(10)
+                        .HasColumnType("TEXT");
+
+                    b.HasKey("NoteId", "UserId");
+
+                    b.HasIndex("UserId");
+
+                    b.ToTable("NotePermissions");
+                });
+
+            modelBuilder.Entity("Bluestaq.Notes.Api.Data.SecurityAuditEvent", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("Action")
+                        .IsRequired()
+                        .HasMaxLength(100)
+                        .HasColumnType("TEXT");
+
+                    b.Property<Guid>("ActorCredentialId")
+                        .HasColumnType("TEXT");
+
+                    b.Property<Guid>("ActorUserId")
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("Details")
+                        .IsRequired()
+                        .HasMaxLength(4000)
+                        .HasColumnType("TEXT");
+
+                    b.Property<DateTime>("OccurredAt")
+                        .HasColumnType("TEXT");
+
+                    b.Property<Guid>("TargetId")
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("TargetType")
+                        .IsRequired()
+                        .HasMaxLength(50)
+                        .HasColumnType("TEXT");
+
+                    b.Property<Guid?>("TeamId")
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("TraceId")
+                        .IsRequired()
+                        .HasMaxLength(100)
+                        .HasColumnType("TEXT");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("TargetId");
+
+                    b.HasIndex("ActorUserId", "OccurredAt");
+
+                    b.HasIndex("OccurredAt", "Id");
+
+                    b.HasIndex("TeamId", "OccurredAt");
+
+                    b.ToTable("SecurityAuditEvents");
                 });
 
             modelBuilder.Entity("Bluestaq.Notes.Api.Data.Team", b =>
@@ -107,12 +223,6 @@ namespace Bluestaq.Notes.Api.Data.Migrations
                         .ValueGeneratedOnAdd()
                         .HasColumnType("TEXT");
 
-                    b.Property<string>("ApiKeyHash")
-                        .IsRequired()
-                        .HasMaxLength(64)
-                        .HasColumnType("TEXT")
-                        .IsFixedLength();
-
                     b.Property<string>("DisplayName")
                         .IsRequired()
                         .HasMaxLength(100)
@@ -120,10 +230,18 @@ namespace Bluestaq.Notes.Api.Data.Migrations
 
                     b.HasKey("Id");
 
-                    b.HasIndex("ApiKeyHash")
-                        .IsUnique();
-
                     b.ToTable("Users");
+                });
+
+            modelBuilder.Entity("Bluestaq.Notes.Api.Data.ApiKeyCredential", b =>
+                {
+                    b.HasOne("Bluestaq.Notes.Api.Data.User", "User")
+                        .WithMany("ApiKeys")
+                        .HasForeignKey("UserId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+
+                    b.Navigation("User");
                 });
 
             modelBuilder.Entity("Bluestaq.Notes.Api.Data.Note", b =>
@@ -151,6 +269,25 @@ namespace Bluestaq.Notes.Api.Data.Migrations
                     b.Navigation("Team");
 
                     b.Navigation("UpdatedBy");
+                });
+
+            modelBuilder.Entity("Bluestaq.Notes.Api.Data.NotePermission", b =>
+                {
+                    b.HasOne("Bluestaq.Notes.Api.Data.Note", "Note")
+                        .WithMany("Permissions")
+                        .HasForeignKey("NoteId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+
+                    b.HasOne("Bluestaq.Notes.Api.Data.User", "User")
+                        .WithMany()
+                        .HasForeignKey("UserId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+
+                    b.Navigation("Note");
+
+                    b.Navigation("User");
                 });
 
             modelBuilder.Entity("Bluestaq.Notes.Api.Data.Team", b =>
@@ -183,6 +320,11 @@ namespace Bluestaq.Notes.Api.Data.Migrations
                     b.Navigation("User");
                 });
 
+            modelBuilder.Entity("Bluestaq.Notes.Api.Data.Note", b =>
+                {
+                    b.Navigation("Permissions");
+                });
+
             modelBuilder.Entity("Bluestaq.Notes.Api.Data.Team", b =>
                 {
                     b.Navigation("Memberships");
@@ -192,6 +334,8 @@ namespace Bluestaq.Notes.Api.Data.Migrations
 
             modelBuilder.Entity("Bluestaq.Notes.Api.Data.User", b =>
                 {
+                    b.Navigation("ApiKeys");
+
                     b.Navigation("Memberships");
                 });
 #pragma warning restore 612, 618

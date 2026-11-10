@@ -20,7 +20,16 @@ public static class DatabaseInitializer
         {
             Id = seed.Id,
             DisplayName = seed.DisplayName,
-            ApiKeyHash = seed.ApiKeyHash,
+            ApiKeys =
+            [
+                new ApiKeyCredential
+                {
+                    Id = Guid.NewGuid(),
+                    KeyHash = seed.ApiKeyHash,
+                    Name = "Development",
+                    CreatedAt = DateTime.UtcNow,
+                },
+            ],
         }));
         await dbContext.SaveChangesAsync();
     }

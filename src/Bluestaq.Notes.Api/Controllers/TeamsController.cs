@@ -1,6 +1,7 @@
 using Bluestaq.Notes.Api.Auth;
 using Bluestaq.Notes.Api.Contracts;
 using Bluestaq.Notes.Api.Data;
+using Bluestaq.Notes.Api.Security;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.Data.Sqlite;
@@ -11,7 +12,7 @@ namespace Bluestaq.Notes.Api.Controllers;
 [ApiController]
 [Authorize]
 [Route("api/teams")]
-public sealed class TeamsController(NotesDbContext dbContext) : ControllerBase
+public sealed class TeamsController(NotesDbContext dbContext, SecurityAudit securityAudit) : ControllerBase
 {
     private const int SqliteConstraintPrimaryKey = 1555;
 
@@ -41,6 +42,12 @@ public sealed class TeamsController(NotesDbContext dbContext) : ControllerBase
         };
 
         dbContext.Teams.Add(team);
+        securityAudit.Record(
+            SecurityAuditActions.TeamCreated,
+            SecurityAuditTargets.Team,
+            team.Id,
+            team.Id,
+            new { team.Name });
         await dbContext.SaveChangesAsync(cancellationToken);
 
         return CreatedAtAction(nameof(Get), new { teamId = team.Id }, await BuildResponse(team.Id, cancellationToken));
@@ -75,6 +82,118 @@ public sealed class TeamsController(NotesDbContext dbContext) : ControllerBase
         }
 
         return Ok(await BuildResponse(teamId, cancellationToken));
+    }
+
+    [HttpPatch("{teamId:guid}")]
+    public async Task<ActionResult<TeamResponse>> Update(
+        Guid teamId,
+        UpdateTeamRequest request,
+        CancellationToken cancellationToken)
+    {
+        if (string.IsNullOrWhiteSpace(request.Name))
+        {
+            ModelState.AddModelError(nameof(request.Name), "Name must contain non-whitespace characters.");
+            return ValidationProblem(ModelState);
+        }
+
+        var ownerResult = await CheckOwner(teamId, User.GetUserId(), cancellationToken);
+        if (ownerResult is not null)
+        {
+            return ownerResult;
+        }
+
+        var team = await dbContext.Teams.SingleAsync(team => team.Id == teamId, cancellationToken);
+        team.Name = request.Name.Trim();
+        await dbContext.SaveChangesAsync(cancellationToken);
+        return Ok(await BuildResponse(teamId, cancellationToken));
+    }
+
+    [HttpDelete("{teamId:guid}")]
+    public async Task<IActionResult> Delete(Guid teamId, CancellationToken cancellationToken)
+    {
+        var ownerResult = await CheckOwner(teamId, User.GetUserId(), cancellationToken);
+        if (ownerResult is not null)
+        {
+            return ownerResult;
+        }
+
+        var team = await dbContext.Teams.SingleAsync(team => team.Id == teamId, cancellationToken);
+        dbContext.Teams.Remove(team);
+        securityAudit.Record(
+            SecurityAuditActions.TeamDeleted,
+            SecurityAuditTargets.Team,
+            team.Id,
+            team.Id,
+            new { team.Name });
+        await dbContext.SaveChangesAsync(cancellationToken);
+        return NoContent();
+    }
+
+    [HttpPost("{teamId:guid}/invitations")]
+    public async Task<ActionResult<InvitationResponse>> Invite(
+        Guid teamId,
+        InviteTeamMemberRequest request,
+        CancellationToken cancellationToken)
+    {
+        if (string.IsNullOrWhiteSpace(request.DisplayName))
+        {
+            ModelState.AddModelError(nameof(request.DisplayName), "DisplayName must contain non-whitespace characters.");
+        }
+
+        if (string.IsNullOrWhiteSpace(request.KeyName))
+        {
+            ModelState.AddModelError(nameof(request.KeyName), "KeyName must contain non-whitespace characters.");
+        }
+
+        if (request.ExpiresAt <= DateTime.UtcNow)
+        {
+            ModelState.AddModelError(nameof(request.ExpiresAt), "ExpiresAt must be in the future.");
+        }
+
+        if (!ModelState.IsValid)
+        {
+            return ValidationProblem(ModelState);
+        }
+
+        var ownerResult = await CheckOwner(teamId, User.GetUserId(), cancellationToken);
+        if (ownerResult is not null)
+        {
+            return ownerResult;
+        }
+
+        var userId = Guid.NewGuid();
+        var joinedAt = DateTime.UtcNow;
+        var (credential, apiKey) = ApiKeysController.CreateCredential(
+            userId,
+            request.KeyName,
+            request.ExpiresAt);
+        var user = new User
+        {
+            Id = userId,
+            DisplayName = request.DisplayName.Trim(),
+            ApiKeys = [credential],
+            Memberships =
+            [
+                new TeamMembership { TeamId = teamId, JoinedAt = joinedAt },
+            ],
+        };
+        dbContext.Users.Add(user);
+        securityAudit.Record(
+            SecurityAuditActions.UserInvited,
+            SecurityAuditTargets.User,
+            user.Id,
+            teamId,
+            new { user.DisplayName, CredentialId = credential.Id, credential.Name, credential.ExpiresAt });
+        await dbContext.SaveChangesAsync(cancellationToken);
+
+        return CreatedAtAction(
+            nameof(Get),
+            new { teamId },
+            new InvitationResponse(
+                user.Id,
+                user.DisplayName,
+                joinedAt,
+                ApiKeysController.ToCreatedResponse(credential, apiKey)));
     }
 
     [HttpPost("{teamId:guid}/members")]
@@ -115,6 +234,12 @@ public sealed class TeamsController(NotesDbContext dbContext) : ControllerBase
             JoinedAt = DateTime.UtcNow,
         };
         dbContext.TeamMemberships.Add(membership);
+        securityAudit.Record(
+            SecurityAuditActions.TeamMemberAdded,
+            SecurityAuditTargets.TeamMembership,
+            request.UserId,
+            teamId,
+            new { user.DisplayName });
 
         try
         {
@@ -157,7 +282,32 @@ public sealed class TeamsController(NotesDbContext dbContext) : ControllerBase
             return Problem("The team membership does not exist.", statusCode: StatusCodes.Status404NotFound);
         }
 
+        var notePermissions = await dbContext.NotePermissions
+            .Where(permission => permission.UserId == userId && permission.Note.TeamId == teamId)
+            .ToArrayAsync(cancellationToken);
+        dbContext.NotePermissions.RemoveRange(notePermissions);
+        foreach (var permission in notePermissions)
+        {
+            securityAudit.Record(
+                SecurityAuditActions.NotePermissionRemoved,
+                SecurityAuditTargets.NotePermission,
+                userId,
+                teamId,
+                new
+                {
+                    permission.NoteId,
+                    Role = permission.Role.ToString().ToLowerInvariant(),
+                    Reason = "membership-removed",
+                });
+        }
+
         dbContext.TeamMemberships.Remove(membership);
+        securityAudit.Record(
+            SecurityAuditActions.TeamMemberRemoved,
+            SecurityAuditTargets.TeamMembership,
+            userId,
+            teamId,
+            new { RemovedPermissionCount = notePermissions.Length });
         await dbContext.SaveChangesAsync(cancellationToken);
         return NoContent();
     }

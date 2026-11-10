@@ -1,5 +1,8 @@
+using System.Text.Json;
+using System.Text.Json.Serialization;
 using Bluestaq.Notes.Api.Auth;
 using Bluestaq.Notes.Api.Data;
+using Bluestaq.Notes.Api.Security;
 using Microsoft.AspNetCore.Authentication;
 using Microsoft.EntityFrameworkCore;
 
@@ -14,7 +17,11 @@ builder.Services.AddAuthentication(ApiKeyAuthenticationDefaults.Scheme)
         ApiKeyAuthenticationDefaults.Scheme,
         _ => { });
 builder.Services.AddAuthorization();
-builder.Services.AddControllers();
+builder.Services.AddHttpContextAccessor();
+builder.Services.AddScoped<SecurityAudit>();
+builder.Services.AddControllers().AddJsonOptions(options =>
+    options.JsonSerializerOptions.Converters.Add(
+        new JsonStringEnumConverter(JsonNamingPolicy.CamelCase)));
 builder.Services.AddProblemDetails();
 
 var app = builder.Build();
