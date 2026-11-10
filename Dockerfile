@@ -1,4 +1,4 @@
-FROM mcr.microsoft.com/dotnet/sdk:10.0 AS build
+FROM mcr.microsoft.com/dotnet/sdk:11.0 AS build
 WORKDIR /src
 COPY Bluestaq.Notes.slnx global.json ./
 COPY src/Bluestaq.Notes.Api/Bluestaq.Notes.Api.csproj src/Bluestaq.Notes.Api/
