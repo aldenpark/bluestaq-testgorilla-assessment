@@ -1,4 +1,6 @@
-# Bluestaq Notes API
+# Bluestaq TestGorilla Assessment — Notes API
+
+Repository: [aldenpark/bluestaq-testgorilla-assessment](https://github.com/aldenpark/bluestaq-testgorilla-assessment)
 
 A small-team note service built with ASP.NET Core, Entity Framework Core, and SQLite. It supports owner-managed invitations, ownership transfer, revocable API keys, restricted notes with reader/editor grants, optimistic concurrency, HMAC-protected security auditing, API versioning, and filtered full-text discovery.
 
