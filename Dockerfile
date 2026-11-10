@@ -7,7 +7,7 @@ COPY src/Bluestaq.Notes.Api/ src/Bluestaq.Notes.Api/
 RUN dotnet publish src/Bluestaq.Notes.Api/Bluestaq.Notes.Api.csproj \
     --configuration Release --no-restore --output /app/publish
 
-FROM mcr.microsoft.com/dotnet/aspnet:10.0 AS final
+FROM mcr.microsoft.com/dotnet/aspnet:11.0 AS final
 WORKDIR /app
 RUN mkdir /app/data && chown "$APP_UID:$APP_UID" /app/data
 COPY --from=build --chown=$APP_UID:$APP_UID /app/publish .
